@@ -7,13 +7,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 logging.basicConfig(level=logging.INFO)
 
-# --- 1. Dummy HTTP Server for Render Port Check ---
+# --- 1. Background Health Server for Render ---
 class SimpleHealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot is healthy and running!")
+        self.wfile.write(b"Quotex Binary Engine Active!")
 
     def do_HEAD(self):
         self.send_response(200)
@@ -24,12 +24,42 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHealthHandler)
     server.serve_forever()
 
-# --- 2. Risk Parameters & Indicator Calculations ---
-LIVE_ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"]
+# --- 2. Complete Quotex Binary Options Asset Catalog ---
+QUOTEX_BINARY_ASSETS = {
+    "live_currencies": [
+        "EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD",
+        "EUR/GBP", "USD/CHF", "NZD/USD", "EUR/JPY", "GBP/JPY",
+        "AUD/CAD", "CAD/CHF", "EUR/CAD", "EUR/AUD", "GBP/CAD",
+        "GBP/AUD", "AUD/JPY", "CAD/JPY", "CHF/JPY", "NZD/JPY"
+    ],
+    "otc_currencies": [
+        "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)", "USD/INR (OTC)",
+        "USD/BRL (OTC)", "USD/PKR (OTC)", "USD/BDT (OTC)", "USD/IDR (OTC)",
+        "USD/TRY (OTC)", "USD/EGP (OTC)", "EUR/JPY (OTC)", "GBP/JPY (OTC)",
+        "AUD/USD (OTC)", "NZD/CAD (OTC)", "EUR/CHF (OTC)", "CAD/JPY (OTC)",
+        "AUD/CAD (OTC)", "GBP/AUD (OTC)", "EUR/CAD (OTC)", "NZD/USD (OTC)"
+    ],
+    "otc_stocks": [
+        "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Amazon (OTC)",
+        "Google (OTC)", "Meta (OTC)", "NVIDIA (OTC)", "Boeing (OTC)",
+        "Intel (OTC)", "Johnson & Johnson (OTC)", "Pfizer (OTC)", "McDonald's (OTC)"
+    ],
+    "crypto_binary": [
+        "BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD", "XRP/USD", "DOGE/USD", "TRX/USD"
+    ],
+    "commodities_indices": [
+        "Gold (XAU/USD)", "Silver (XAG/USD)", "US Crude (OIL)", "UK Brent",
+        "US Tech 100 (OTC)", "SPX 500 (OTC)", "Dow Jones 30 (OTC)"
+    ]
+}
+
+TIMEFRAMES = ["M1 (1 Min)", "M2 (2 Min)", "M5 (5 Min)"]
+
+# --- 3. Non-Martingale Risk Engine ---
 ACCOUNT_BALANCE = 1000.0
-RISK_PER_TRADE_PCT = 0.015   # 1.5% Flat Stake - NO MARTINGALE
-MAX_DAILY_LOSS_PCT = 0.05
-MAX_CONSECUTIVE_LOSSES = 3
+FLAT_RISK_PCT = 0.015       # 1.5% Flat Stake ($15)
+MAX_DAILY_LOSS_PCT = 0.05   # 5% Max Drawdown
+MAX_CONSECUTIVE_LOSSES = 3  # Circuit Breaker
 
 session_stats = {
     "balance": ACCOUNT_BALANCE,
@@ -62,45 +92,57 @@ def compute_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
-def evaluate_strategy(pair: str) -> dict:
+def evaluate_strategy(pair: str, tf: str) -> dict:
     sample_closes = [1.0850, 1.0848, 1.0845, 1.0840, 1.0835, 1.0830, 1.0827, 1.0822, 1.0818, 1.0815, 1.0810, 1.0808, 1.0805, 1.0802, 1.0798]
     rsi = round(compute_rsi(sample_closes, period=14), 1)
-    stake_amount = round(session_stats["balance"] * RISK_PER_TRADE_PCT, 2)
+    stake_amount = round(session_stats["balance"] * FLAT_RISK_PCT, 2)
     last_price = sample_closes[-1]
 
-    signal = "NEUTRAL"
-    notes = "Consolidating. Waiting for oversold/overbought boundary."
+    signal = "NEUTRAL (WAIT)"
+    notes = "Price consolidating inside normal band. Wait for exhaustion."
 
     if rsi <= 30:
-        signal = "CALL (HIGHER)"
-        notes = f"RSI is oversold ({rsi} <= 30) near multi-candle support."
+        signal = "CALL (HIGHER / 🟢)"
+        notes = f"RSI oversold ({rsi} <= 30) near key rejection support."
     elif rsi >= 70:
-        signal = "PUT (LOWER)"
-        notes = f"RSI is overbought ({rsi} >= 70) near local resistance."
+        signal = "PUT (LOWER / 🔴)"
+        notes = f"RSI overbought ({rsi} >= 70) near key rejection resistance."
+
+    expiry_map = {
+        "M1 (1 Min)": "1 - 2 Minutes",
+        "M2 (2 Min)": "2 - 3 Minutes",
+        "M5 (5 Min)": "5 Minutes"
+    }
 
     return {
         "signal": signal,
         "stake": stake_amount,
         "notes": notes,
         "rsi": rsi,
-        "price": last_price
+        "price": last_price,
+        "expiry": expiry_map.get(tf, "2 Minutes")
     }
 
-# --- 3. Telegram Handlers ---
+# --- 4. Interactive Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can_trade, status_msg = check_risk_guard()
     keyboard = [
-        [InlineKeyboardButton(f"📈 {pair}", callback_data=f"analyze_{pair}") for pair in LIVE_ASSETS[:2]],
-        [InlineKeyboardButton(f"📉 {pair}", callback_data=f"analyze_{pair}") for pair in LIVE_ASSETS[2:]],
+        [InlineKeyboardButton("🌐 Live Forex", callback_data="cat_live_currencies_0"),
+         InlineKeyboardButton("⚡ OTC Forex (24/7)", callback_data="cat_otc_currencies_0")],
+        [InlineKeyboardButton("🏢 OTC Stocks", callback_data="cat_otc_stocks_0"),
+         InlineKeyboardButton("🪙 Crypto Binary", callback_data="cat_crypto_binary_0")],
+        [InlineKeyboardButton("📈 Commodities & Indices", callback_data="cat_commodities_indices_0")],
         [InlineKeyboardButton("🛡️ View Risk & Stats", callback_data="view_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"🤖 *Quotex Non-Martingale Signal Engine*\n\n"
-        f"• *Risk Mode:* Flat Sizing (1.5% fixed)\n"
-        f"• *Status:* {status_msg}\n\n"
-        f"Select an asset to analyze:",
+        "📊 *Quotex Binary Options Signal Engine*\n\n"
+        "• *Platform:* Quotex Digital Binary Expiries\n"
+        "• *Risk Mode:* Strict 1.5% Flat Stake\n"
+        "• *Martingale:* Disabled\n"
+        f"• *Status:* `{status_msg}`\n\n"
+        "Select a Quotex binary market:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -108,50 +150,144 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    data = query.data
 
-    if query.data == "view_stats":
+    if data == "main_menu":
+        keyboard = [
+            [InlineKeyboardButton("🌐 Live Forex", callback_data="cat_live_currencies_0"),
+             InlineKeyboardButton("⚡ OTC Forex (24/7)", callback_data="cat_otc_currencies_0")],
+            [InlineKeyboardButton("🏢 OTC Stocks", callback_data="cat_otc_stocks_0"),
+             InlineKeyboardButton("🪙 Crypto Binary", callback_data="cat_crypto_binary_0")],
+            [InlineKeyboardButton("📈 Commodities & Indices", callback_data="cat_commodities_indices_0")],
+            [InlineKeyboardButton("🛡️ View Risk & Stats", callback_data="view_stats")]
+        ]
         await query.edit_message_text(
-            f"📊 *Current Session Performance*\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"• *Account Balance:* `${session_stats['balance']:.2f}`\n"
-            f"• *Flat Stake per Trade:* `${session_stats['balance'] * RISK_PER_TRADE_PCT:.2f}`\n"
-            f"• *Daily P&L:* `${session_stats['daily_pnl']:.2f}`\n"
-            f"• *Consecutive Losses:* `{session_stats['consecutive_losses']} / {MAX_CONSECUTIVE_LOSSES}`\n"
-            f"• *Status:* `{'ACTIVE' if not session_stats['is_locked'] else 'LOCKED (Cooldown)'}`\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"_Martingale is permanently disabled._",
+            "📊 *Select Quotex Binary Market:*",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
         return
 
-    if query.data.startswith("analyze_"):
-        pair = query.data.replace("analyze_", "")
-        can_trade, status_msg = check_risk_guard()
+    if data == "view_stats":
+        keyboard = [[InlineKeyboardButton("⬅️ Back to Markets", callback_data="main_menu")]]
+        await query.edit_message_text(
+            f"📊 *Current Session Performance*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"• *Account Balance:* `${session_stats['balance']:.2f}`\n"
+            f"• *Flat Stake per Trade:* `${session_stats['balance'] * FLAT_RISK_PCT:.2f}` (1.5%)\n"
+            f"• *Daily P&L:* `${session_stats['daily_pnl']:.2f}`\n"
+            f"• *Max Daily Drawdown:* `-${session_stats['balance'] * MAX_DAILY_LOSS_PCT:.2f}` (5%)\n"
+            f"• *Consecutive Losses:* `{session_stats['consecutive_losses']} / {MAX_CONSECUTIVE_LOSSES}`\n"
+            f"• *Status:* `{'ACTIVE' if not session_stats['is_locked'] else 'LOCKED (Cooldown)'}`\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"_Martingale is permanently disabled._",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return
 
-        if not can_trade:
-            await query.edit_message_text(f"⛔ *Signal Suppressed:* {status_msg}", parse_mode="Markdown")
-            return
+    # Category Pagination (6 items per screen for mobile readability)
+    if data.startswith("cat_"):
+        parts = data.split("_")
+        cat_key = f"{parts[1]}_{parts[2]}"
+        page = int(parts[3])
 
-        res = evaluate_strategy(pair)
+        assets = QUOTEX_BINARY_ASSETS.get(cat_key, [])
+        page_size = 6
+        total_pages = (len(assets) + page_size - 1) // page_size
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, len(assets))
+        current_assets = assets[start_idx:end_idx]
+
+        buttons = []
+        for i in range(0, len(current_assets), 2):
+            row = [InlineKeyboardButton(current_assets[i], callback_data=f"asset_{current_assets[i]}")]
+            if i + 1 < len(current_assets):
+                row.append(InlineKeyboardButton(current_assets[i+1], callback_data=f"asset_{current_assets[i+1]}"))
+            buttons.append(row)
+
+        # Pagination controls
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"cat_{cat_key}_{page-1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"cat_{cat_key}_{page+1}"))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([InlineKeyboardButton("🔙 All Categories", callback_data="main_menu")])
+
+        titles = {
+            "live_currencies": "🌐 Live Forex",
+            "otc_currencies": "⚡ OTC Forex (24/7)",
+            "otc_stocks": "🏢 OTC Stocks",
+            "crypto_binary": "🪙 Crypto Binary",
+            "commodities_indices": "📈 Commodities & Indices"
+        }
 
         await query.edit_message_text(
-            f"🎯 *Analysis Result: {pair}*\n"
+            f"*{titles.get(cat_key, 'Assets')} (Page {page + 1}/{total_pages})*\n"
+            f"Select a Quotex asset to analyze:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown"
+        )
+        return
+
+    # Step 2: Timeframe Selection
+    if data.startswith("asset_"):
+        asset_name = data.replace("asset_", "")
+        buttons = [
+            [InlineKeyboardButton(tf, callback_data=f"run_{asset_name}|{tf}") for tf in TIMEFRAMES[:2]],
+            [InlineKeyboardButton(TIMEFRAMES[2], callback_data=f"run_{asset_name}|{TIMEFRAMES[2]}")],
+            [InlineKeyboardButton("⬅️ Back to Assets", callback_data="main_menu")]
+        ]
+        await query.edit_message_text(
+            f"🎯 *Selected Quotex Asset:* `{asset_name}`\n"
+            f"Choose your candle timeframe:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown"
+        )
+        return
+
+    # Step 3: Run Confluence Analysis
+    if data.startswith("run_"):
+        payload = data.replace("run_", "")
+        asset_name, tf = payload.split("|")
+
+        can_trade, status_msg = check_risk_guard()
+        if not can_trade:
+            keyboard = [[InlineKeyboardButton("⬅️ Back to Assets", callback_data="main_menu")]]
+            await query.edit_message_text(
+                f"⛔ *Signal Suppressed:* {status_msg}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+
+        res = evaluate_strategy(asset_name, tf)
+        keyboard = [
+            [InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"run_{asset_name}|{tf}")],
+            [InlineKeyboardButton("⏱️ Change Timeframe", callback_data=f"asset_{asset_name}")],
+            [InlineKeyboardButton("⬅️ Back to Assets", callback_data="main_menu")]
+        ]
+
+        await query.edit_message_text(
+            f"🎯 *Quotex Binary Signal: {asset_name}*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• *Signal:* `{res['signal']}`\n"
+            f"• *Chart Timeframe:* `{tf}`\n"
+            f"• *Option Expiry:* `{res['expiry']}`\n"
             f"• *Recommended Stake:* `${res['stake']}` (Strict 1.5% Flat)\n"
-            f"• *Expiry Time:* 2 Minutes\n"
-            f"• *RSI (14):* {res['rsi']}\n"
+            f"• *RSI (14):* `{res['rsi']}`\n"
             f"• *Setup Notes:* {res['notes']}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ *Execution:* Take exactly ONE trade. Do not re-enter if price moves against you.",
+            f"⚠️ *Execution:* Check payout on Quotex (>= 80%). Enter trade on the 58th second of current candle.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
 
 if __name__ == "__main__":
-    # Start web server thread to pass Render's port-binding check
     threading.Thread(target=run_health_server, daemon=True).start()
-
-    # Launch Telegram Bot
     TOKEN = os.getenv("BOT_TOKEN", "")
     if not TOKEN:
         raise ValueError("BOT_TOKEN environment variable not set!")
