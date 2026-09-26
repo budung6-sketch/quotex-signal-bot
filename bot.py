@@ -1,17 +1,36 @@
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 
-# --- Configuration & Risk Parameters ---
-LIVE_ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"]
-ACCOUNT_BALANCE = 1000.0     # Baseline balance
-RISK_PER_TRADE_PCT = 0.015   # Strict 1.5% Flat Stake ($15) - NO MARTINGALE
-MAX_DAILY_LOSS_PCT = 0.05    # 5% Max Daily Drawdown
-MAX_CONSECUTIVE_LOSSES = 3   # Circuit breaker threshold
+# --- 1. Dummy HTTP Server for Render Port Check ---
+class SimpleHealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is healthy and running!")
 
-# In-memory session tracking
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHealthHandler)
+    server.serve_forever()
+
+# --- 2. Risk Parameters & Indicator Calculations ---
+LIVE_ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"]
+ACCOUNT_BALANCE = 1000.0
+RISK_PER_TRADE_PCT = 0.015   # 1.5% Flat Stake - NO MARTINGALE
+MAX_DAILY_LOSS_PCT = 0.05
+MAX_CONSECUTIVE_LOSSES = 3
+
 session_stats = {
     "balance": ACCOUNT_BALANCE,
     "consecutive_losses": 0,
@@ -30,7 +49,6 @@ def check_risk_guard() -> tuple[bool, str]:
         return False, "Daily max drawdown limit (-5%) reached. Trading stopped."
     return True, "Active"
 
-# Pure-Python Technical Indicator Engine (No numba/heavy dependencies)
 def compute_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50.0
@@ -45,9 +63,7 @@ def compute_rsi(prices, period=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 def evaluate_strategy(pair: str) -> dict:
-    # Sample close prices sequence
     sample_closes = [1.0850, 1.0848, 1.0845, 1.0840, 1.0835, 1.0830, 1.0827, 1.0822, 1.0818, 1.0815, 1.0810, 1.0808, 1.0805, 1.0802, 1.0798]
-    
     rsi = round(compute_rsi(sample_closes, period=14), 1)
     stake_amount = round(session_stats["balance"] * RISK_PER_TRADE_PCT, 2)
     last_price = sample_closes[-1]
@@ -70,7 +86,7 @@ def evaluate_strategy(pair: str) -> dict:
         "price": last_price
     }
 
-# --- Telegram Handlers ---
+# --- 3. Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can_trade, status_msg = check_risk_guard()
     keyboard = [
@@ -132,9 +148,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 if __name__ == "__main__":
-    # Put your BotFather token here or load from environment variable
-    import os
-    TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+    # Start web server thread to pass Render's port-binding check
+    threading.Thread(target=run_health_server, daemon=True).start()
+
+    # Launch Telegram Bot
+    TOKEN = os.getenv("BOT_TOKEN", "")
+    if not TOKEN:
+        raise ValueError("BOT_TOKEN environment variable not set!")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
