@@ -13,7 +13,7 @@ class SimpleHealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quotex Binary Engine Active!")
+        self.wfile.write(b"Quotex Engine is Active!")
 
     def do_HEAD(self):
         self.send_response(200)
@@ -24,7 +24,7 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHealthHandler)
     server.serve_forever()
 
-# --- 2. Complete Quotex Binary Options Asset Catalog ---
+# --- 2. Quotex Binary Options Assets ---
 QUOTEX_BINARY_ASSETS = {
     "live_currencies": [
         "EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD",
@@ -99,7 +99,7 @@ def evaluate_strategy(pair: str, tf: str) -> dict:
     last_price = sample_closes[-1]
 
     signal = "NEUTRAL (WAIT)"
-    notes = "Price consolidating inside normal band. Wait for exhaustion."
+    notes = "Price consolidating inside normal range. Awaiting rejection."
 
     if rsi <= 30:
         signal = "CALL (HIGHER / 🟢)"
@@ -108,10 +108,11 @@ def evaluate_strategy(pair: str, tf: str) -> dict:
         signal = "PUT (LOWER / 🔴)"
         notes = f"RSI overbought ({rsi} >= 70) near key rejection resistance."
 
+    # Exact Expiry Mapping for Quotex
     expiry_map = {
-        "M1 (1 Min)": "1 - 2 Minutes",
-        "M2 (2 Min)": "2 - 3 Minutes",
-        "M5 (5 Min)": "5 Minutes"
+        "M1 (1 Min)": "Exact 1 Minute (00:01:00)",
+        "M2 (2 Min)": "Exact 2 Minutes (00:02:00)",
+        "M5 (5 Min)": "Exact 5 Minutes (00:05:00)"
     }
 
     return {
@@ -120,7 +121,7 @@ def evaluate_strategy(pair: str, tf: str) -> dict:
         "notes": notes,
         "rsi": rsi,
         "price": last_price,
-        "expiry": expiry_map.get(tf, "2 Minutes")
+        "expiry": expiry_map.get(tf, "Exact 1 Minute (00:01:00)")
     }
 
 # --- 4. Interactive Telegram Handlers ---
@@ -138,7 +139,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "📊 *Quotex Binary Options Signal Engine*\n\n"
-        "• *Platform:* Quotex Digital Binary Expiries\n"
         "• *Risk Mode:* Strict 1.5% Flat Stake\n"
         "• *Martingale:* Disabled\n"
         f"• *Status:* `{status_msg}`\n\n"
@@ -186,7 +186,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Category Pagination (6 items per screen for mobile readability)
+    # Pagination handling
     if data.startswith("cat_"):
         parts = data.split("_")
         cat_key = f"{parts[1]}_{parts[2]}"
@@ -206,7 +206,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 row.append(InlineKeyboardButton(current_assets[i+1], callback_data=f"asset_{current_assets[i+1]}"))
             buttons.append(row)
 
-        # Pagination controls
         nav_row = []
         if page > 0:
             nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"cat_{cat_key}_{page-1}"))
@@ -233,7 +232,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Step 2: Timeframe Selection
+    # Timeframe selection
     if data.startswith("asset_"):
         asset_name = data.replace("asset_", "")
         buttons = [
@@ -242,14 +241,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ Back to Assets", callback_data="main_menu")]
         ]
         await query.edit_message_text(
-            f"🎯 *Selected Quotex Asset:* `{asset_name}`\n"
+            f"🎯 *Selected Asset:* `{asset_name}`\n"
             f"Choose your candle timeframe:",
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode="Markdown"
         )
         return
 
-    # Step 3: Run Confluence Analysis
+    # Confluence Analysis
     if data.startswith("run_"):
         payload = data.replace("run_", "")
         asset_name, tf = payload.split("|")
@@ -281,7 +280,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• *RSI (14):* `{res['rsi']}`\n"
             f"• *Setup Notes:* {res['notes']}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ *Execution:* Check payout on Quotex (>= 80%). Enter trade on the 58th second of current candle.",
+            f"⚠️ *Execution:* Set Timer to `{res['expiry']}` on Quotex. Enter at 00:55–00:58 before new candle opens.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
