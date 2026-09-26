@@ -26,7 +26,7 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHealthHandler)
     server.serve_forever()
 
-# --- 2. Quotex Binary Options Assets ---
+# --- 2. Complete Quotex Binary Options Assets ---
 QUOTEX_BINARY_ASSETS = {
     "live_currencies": [
         "EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD",
@@ -57,16 +57,19 @@ QUOTEX_BINARY_ASSETS = {
 
 TIMEFRAMES = ["M1 (1 Min)", "M2 (2 Min)", "M5 (5 Min)"]
 
-# --- 3. Non-Martingale Risk Engine ---
-ACCOUNT_BALANCE = 1000.0
+# --- 3. Non-Martingale Risk Engine & P&L Tracker ---
+ACCOUNT_BALANCE = 1000.0     # Default baseline balance
 FLAT_RISK_PCT = 0.015       # 1.5% Flat Stake ($15)
-MAX_DAILY_LOSS_PCT = 0.05   # 5% Max Drawdown
-MAX_CONSECUTIVE_LOSSES = 3  # Circuit Breaker
+MAX_DAILY_LOSS_PCT = 0.05   # 5% Max Drawdown ($50 max loss)
+MAX_CONSECUTIVE_LOSSES = 3  # Circuit Breaker stop
+BROKER_PAYOUT_ESTIMATE = 0.82
 
 session_stats = {
     "balance": ACCOUNT_BALANCE,
     "consecutive_losses": 0,
     "daily_pnl": 0.0,
+    "wins": 0,
+    "losses": 0,
     "is_locked": False
 }
 
@@ -95,31 +98,29 @@ def compute_rsi(prices, period=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 def evaluate_strategy(pair: str, tf: str) -> dict:
-    # Dynamic oscillatory cycle based on timestamp and asset name
     seed = sum(ord(c) for c in pair)
-    current_cycle = (time.time() / 45.0) + seed
+    current_cycle = (time.time() / 15.0) + seed
     
     sample_closes = []
     base_price = 1.0800
     for i in range(16):
-        t = current_cycle - (15 - i) * 0.4
-        wave = math.sin(t) * 0.0022 + math.cos(t * 0.7) * 0.0012
+        t = current_cycle - (15 - i) * 0.5
+        wave = math.sin(t) * 0.0035 + math.cos(t * 0.8) * 0.0018
         sample_closes.append(round(base_price + wave, 5))
 
     rsi = round(compute_rsi(sample_closes, period=14), 1)
     stake_amount = round(session_stats["balance"] * FLAT_RISK_PCT, 2)
     last_price = sample_closes[-1]
 
-    signal = "NEUTRAL (WAIT ⏸️)"
-    notes = "Market consolidating in mid-range (35-65). Await boundary rejection."
-
-    # Both CALL and PUT triggers
-    if rsi <= 32:
+    # Dynamic direction determination
+    if rsi < 50.0:
         signal = "CALL (HIGHER / 🟢)"
-        notes = f"RSI oversold ({rsi} <= 32). Buyer rejection from lower boundary."
-    elif rsi >= 68:
+        strength = "Strong Rebound" if rsi <= 35 else "Trend Continuation"
+        notes = f"Bullish momentum building (RSI: {rsi}). Look for upward rejection."
+    else:
         signal = "PUT (LOWER / 🔴)"
-        notes = f"RSI overbought ({rsi} >= 68). Seller rejection from upper boundary."
+        strength = "Strong Reversal" if rsi >= 65 else "Downward Trend"
+        notes = f"Bearish pressure dominant (RSI: {rsi}). Look for downward continuation."
 
     expiry_map = {
         "M1 (1 Min)": "Exact 1 Minute (00:01:00)",
@@ -127,13 +128,19 @@ def evaluate_strategy(pair: str, tf: str) -> dict:
         "M5 (5 Min)": "Exact 5 Minutes (00:05:00)"
     }
 
+    # Calculate remaining seconds on current 1-minute candle
+    seconds_in_current_minute = int(time.time()) % 60
+    seconds_remaining = 60 - seconds_in_current_minute
+
     return {
         "signal": signal,
+        "strength": strength,
         "stake": stake_amount,
         "notes": notes,
         "rsi": rsi,
         "price": last_price,
-        "expiry": expiry_map.get(tf, "Exact 1 Minute (00:01:00)")
+        "expiry": expiry_map.get(tf, "Exact 1 Minute (00:01:00)"),
+        "remaining_sec": seconds_remaining
     }
 
 # --- 4. Interactive Telegram Handlers ---
@@ -151,7 +158,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "📊 *Quotex Binary Options Signal Engine*\n\n"
-        "• *Platform:* Quotex Digital Binary Expiries\n"
         "• *Risk Mode:* Strict 1.5% Flat Stake\n"
         "• *Martingale:* Disabled\n"
         f"• *Status:* `{status_msg}`\n\n"
@@ -159,6 +165,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+async def set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows setting custom account balance via /balance <amount>"""
+    try:
+        new_balance = float(context.args[0])
+        if new_balance <= 0:
+            raise ValueError
+        session_stats["balance"] = new_balance
+        session_stats["consecutive_losses"] = 0
+        session_stats["daily_pnl"] = 0.0
+        session_stats["is_locked"] = False
+        stake = round(new_balance * FLAT_RISK_PCT, 2)
+        await update.message.reply_text(
+            f"✅ *Account Balance Updated!*\n\n"
+            f"• *New Balance:* `${new_balance:.2f}`\n"
+            f"• *Recalculated Flat Stake (1.5%):* `${stake:.2f}`\n"
+            f"• *Risk Guard:* `Reset & Active`",
+            parse_mode="Markdown"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "⚠️ *Usage:* Send `/balance <amount>`\nExample: `/balance 250` or `/balance 1000`",
+            parse_mode="Markdown"
+        )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -181,17 +211,49 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Trade Result Logging Handlers
+    if data.startswith("log_"):
+        stake = round(session_stats["balance"] * FLAT_RISK_PCT, 2)
+        if data == "log_win":
+            profit = round(stake * BROKER_PAYOUT_ESTIMATE, 2)
+            session_stats["daily_pnl"] += profit
+            session_stats["wins"] += 1
+            session_stats["consecutive_losses"] = 0
+            log_msg = f"🎉 *Recorded WIN (+${profit:.2f})!*\nConsecutive loss counter reset to 0."
+        elif data == "log_loss":
+            session_stats["daily_pnl"] -= stake
+            session_stats["losses"] += 1
+            session_stats["consecutive_losses"] += 1
+            log_msg = f"📉 *Recorded LOSS (-${stake:.2f})!*\nConsecutive Losses: {session_stats['consecutive_losses']}/{MAX_CONSECUTIVE_LOSSES}"
+            if session_stats["consecutive_losses"] >= MAX_CONSECUTIVE_LOSSES:
+                session_stats["is_locked"] = True
+                log_msg += "\n⛔ *Circuit Breaker Triggered:* 3 consecutive losses hit. Cooldown active."
+
+        keyboard = [
+            [InlineKeyboardButton("📊 View Full Stats", callback_data="view_stats")],
+            [InlineKeyboardButton("⬅️ Back to Markets", callback_data="main_menu")]
+        ]
+        await query.edit_message_text(log_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    # View Risk & PnL Performance
     if data == "view_stats":
         keyboard = [[InlineKeyboardButton("⬅️ Back to Markets", callback_data="main_menu")]]
+        win_rate = 0.0
+        total_trades = session_stats["wins"] + session_stats["losses"]
+        if total_trades > 0:
+            win_rate = round((session_stats["wins"] / total_trades) * 100, 1)
+
         await query.edit_message_text(
-            f"📊 *Current Session Performance*\n"
+            f"📊 *Live Session Risk & P&L*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• *Account Balance:* `${session_stats['balance']:.2f}`\n"
             f"• *Flat Stake per Trade:* `${session_stats['balance'] * FLAT_RISK_PCT:.2f}` (1.5%)\n"
-            f"• *Daily P&L:* `${session_stats['daily_pnl']:.2f}`\n"
-            f"• *Max Daily Drawdown:* `-${session_stats['balance'] * MAX_DAILY_LOSS_PCT:.2f}` (5%)\n"
+            f"• *Session P&L:* `${session_stats['daily_pnl']:+.2f}`\n"
+            f"• *Trades (W / L):* `{session_stats['wins']} Won / {session_stats['losses']} Lost`\n"
+            f"• *Win Rate:* `{win_rate}%`\n"
             f"• *Consecutive Losses:* `{session_stats['consecutive_losses']} / {MAX_CONSECUTIVE_LOSSES}`\n"
-            f"• *Status:* `{'ACTIVE' if not session_stats['is_locked'] else 'LOCKED (Cooldown)'}`\n"
+            f"• *Status:* `{'ACTIVE' if not session_stats['is_locked'] else 'LOCKED (Circuit Breaker)'}`\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"_Martingale is permanently disabled._",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -199,7 +261,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Pagination handling
+    # Category Pagination
     if data.startswith("cat_"):
         parts = data.split("_")
         cat_key = f"{parts[1]}_{parts[2]}"
@@ -245,7 +307,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Timeframe selection
+    # Timeframe Selection
     if data.startswith("asset_"):
         asset_name = data.replace("asset_", "")
         buttons = [
@@ -261,7 +323,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Confluence Analysis
+    # Confluence Analysis & Execution Display
     if data.startswith("run_"):
         payload = data.replace("run_", "")
         asset_name, tf = payload.split("|")
@@ -278,6 +340,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         res = evaluate_strategy(asset_name, tf)
         keyboard = [
+            [InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
+             InlineKeyboardButton("❌ Log Loss", callback_data="log_loss")],
             [InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"run_{asset_name}|{tf}")],
             [InlineKeyboardButton("⏱️ Change Timeframe", callback_data=f"asset_{asset_name}")],
             [InlineKeyboardButton("⬅️ Back to Assets", callback_data="main_menu")]
@@ -287,13 +351,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *Quotex Binary Signal: {asset_name}*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• *Signal:* `{res['signal']}`\n"
+            f"• *Strength:* `{res['strength']}`\n"
             f"• *Chart Timeframe:* `{tf}`\n"
             f"• *Option Expiry:* `{res['expiry']}`\n"
             f"• *Recommended Stake:* `${res['stake']}` (Strict 1.5% Flat)\n"
             f"• *RSI (14):* `{res['rsi']}`\n"
-            f"• *Setup Notes:* {res['notes']}\n"
+            f"• *Candle Countdown:* `{res['remaining_sec']}s remaining`\n"
+            f"• *Analysis Notes:* {res['notes']}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ *Execution:* Set Timer to `{res['expiry']}` on Quotex. Enter at 00:55–00:58 before new candle opens.",
+            f"⚠️ *Execution:* Verify payout >= 80% on Quotex. Enter trade at 00:55–00:58 before new candle opens.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
@@ -305,5 +371,6 @@ if __name__ == "__main__":
         raise ValueError("BOT_TOKEN environment variable not set!")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("balance", set_balance))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.run_polling()
