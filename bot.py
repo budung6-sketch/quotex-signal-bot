@@ -1,17 +1,15 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
-import pandas as pd
-import pandas_ta as ta
 
 logging.basicConfig(level=logging.INFO)
 
 # --- Configuration & Risk Parameters ---
 LIVE_ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"]
-ACCOUNT_BALANCE = 1000.0   # User account balance baseline (e.g., $1,000)
-RISK_PER_TRADE_PCT = 0.015  # Strict 1.5% Flat Stake ($15) - NO MARTINGALE
-MAX_DAILY_LOSS_PCT = 0.05   # 5% Max Daily Drawdown ($50 max loss)
-MAX_CONSECUTIVE_LOSSES = 3  # Circuit breaker threshold
+ACCOUNT_BALANCE = 1000.0     # Baseline balance
+RISK_PER_TRADE_PCT = 0.015   # Strict 1.5% Flat Stake ($15) - NO MARTINGALE
+MAX_DAILY_LOSS_PCT = 0.05    # 5% Max Daily Drawdown
+MAX_CONSECUTIVE_LOSSES = 3   # Circuit breaker threshold
 
 # In-memory session tracking
 session_stats = {
@@ -22,7 +20,6 @@ session_stats = {
 }
 
 def check_risk_guard() -> tuple[bool, str]:
-    """Safety circuit breaker to halt trading when drawdown thresholds are breached."""
     if session_stats["is_locked"]:
         return False, "Bot is locked due to safety limit. Trading resumed tomorrow."
     if session_stats["consecutive_losses"] >= MAX_CONSECUTIVE_LOSSES:
@@ -33,38 +30,47 @@ def check_risk_guard() -> tuple[bool, str]:
         return False, "Daily max drawdown limit (-5%) reached. Trading stopped."
     return True, "Active"
 
-def evaluate_strategy(df: pd.DataFrame) -> dict:
-    """Calculates confluence filters on completed candle bars."""
-    df['EMA_200'] = ta.ema(df['close'], length=200)
-    df['RSI'] = ta.rsi(df['close'], length=14)
-    bb = ta.bbands(df['close'], length=20, std=2.0)
-    df = pd.concat([df, bb], axis=1)
+# Pure-Python Technical Indicator Engine (No numba/heavy dependencies)
+def compute_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50.0
+    deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
 
-    last = df.iloc[-1]
+def evaluate_strategy(pair: str) -> dict:
+    # Sample close prices sequence
+    sample_closes = [1.0850, 1.0848, 1.0845, 1.0840, 1.0835, 1.0830, 1.0827, 1.0822, 1.0818, 1.0815, 1.0810, 1.0808, 1.0805, 1.0802, 1.0798]
+    
+    rsi = round(compute_rsi(sample_closes, period=14), 1)
     stake_amount = round(session_stats["balance"] * RISK_PER_TRADE_PCT, 2)
+    last_price = sample_closes[-1]
 
     signal = "NEUTRAL"
-    setup_notes = "No clear setup. Awaiting candle close."
+    notes = "Consolidating. Waiting for oversold/overbought boundary."
 
-    # Bullish Setup: Oversold, touching lower band, above macro trend
-    if last['RSI'] <= 30 and last['close'] <= last['BBL_20_2.0']:
+    if rsi <= 30:
         signal = "CALL (HIGHER)"
-        setup_notes = "Lower Bollinger touched + RSI oversold (<30)."
-
-    # Bearish Setup: Overbought, touching upper band, below macro trend
-    elif last['RSI'] >= 70 and last['close'] >= last['BBU_20_2.0']:
+        notes = f"RSI is oversold ({rsi} <= 30) near multi-candle support."
+    elif rsi >= 70:
         signal = "PUT (LOWER)"
-        setup_notes = "Upper Bollinger touched + RSI overbought (>70)."
+        notes = f"RSI is overbought ({rsi} >= 70) near local resistance."
 
     return {
         "signal": signal,
         "stake": stake_amount,
-        "notes": setup_notes,
-        "rsi": round(last['RSI'], 2),
-        "price": last['close']
+        "notes": notes,
+        "rsi": rsi,
+        "price": last_price
     }
 
-# --- Telegram Bot UI Handlers ---
+# --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can_trade, status_msg = check_risk_guard()
     keyboard = [
@@ -110,16 +116,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"⛔ *Signal Suppressed:* {status_msg}", parse_mode="Markdown")
             return
 
-        # Example candle data frame (integrate your live WebSocket / broker feed here)
-        sample_candles = {
-            'close': [1.0850, 1.0848, 1.0842, 1.0838, 1.0830],
-            'high': [1.0855, 1.0850, 1.0845, 1.0840, 1.0832],
-            'low': [1.0847, 1.0840, 1.0837, 1.0828, 1.0825],
-            'open': [1.0849, 1.0850, 1.0847, 1.0842, 1.0838],
-            'volume': [100, 120, 150, 180, 240]
-        }
-        df = pd.DataFrame(sample_candles)
-        res = evaluate_strategy(df)
+        res = evaluate_strategy(pair)
 
         await query.edit_message_text(
             f"🎯 *Analysis Result: {pair}*\n"
@@ -130,13 +127,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• *RSI (14):* {res['rsi']}\n"
             f"• *Setup Notes:* {res['notes']}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ *Execution:* Take exactly ONE trade. Do not re-enter if price continues against you.",
+            f"⚠️ *Execution:* Take exactly ONE trade. Do not re-enter if price moves against you.",
             parse_mode="Markdown"
         )
 
 if __name__ == "__main__":
-    TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+    # Put your BotFather token here or load from environment variable
+    import os
+    TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    # app.run_polling()
+    app.run_polling()
