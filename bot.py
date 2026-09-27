@@ -13,17 +13,16 @@ from telegram.ext import (
 )
 
 # ---------------------------------------------------------
-# 1. RENDER PORT BINDING (Prevents SIGTERM / Auto-shutdown)
+# 1. RENDER PORT BINDING (Prevents Auto-Shutdown)
 # ---------------------------------------------------------
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quotex Signal Bot is healthy and running.")
+        self.wfile.write(b"Quotex Trading Bot active.")
 
     def log_message(self, format, *args):
-        # Silence HTTP access logs to keep terminal logs clean
         return
 
 def run_health_server():
@@ -31,11 +30,10 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# Start dummy HTTP server in a daemon thread so Render sees port 10000 open
 threading.Thread(target=run_health_server, daemon=True).start()
 
 # ---------------------------------------------------------
-# 2. LOGGING CONFIGURATION
+# 2. BOT SETUP & COMPLETE ASSET LIST
 # ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -43,37 +41,121 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------
-# 3. ENVIRONMENT VARIABLES
-# ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-QUOTEX_SSID = os.environ.get("QUOTEX_SSID")
-
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN environment variable not set!")
+    logger.error("BOT_TOKEN environment variable is missing!")
     sys.exit(1)
 
-# Default asset and timeframe
-DEFAULT_ASSET = "EUR/USD (OTC)"
-DEFAULT_TIMEFRAME = "M1 (1 Min)"
+# All standard Quotex categories matching the platform
+QUOTEX_MARKETS = {
+    "currencies": {
+        "title": "💱 CURRENCIES",
+        "assets": [
+            "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)",
+            "USD/CHF (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)",
+            "USD/CAD (OTC)", "EUR/GBP (OTC)", "EUR/JPY (OTC)",
+            "GBP/JPY (OTC)", "USD/INR (OTC)", "USD/BRL (OTC)",
+            "USD/PKR (OTC)", "USD/BDT (OTC)", "USD/TRY (OTC)",
+            "USD/EGP (OTC)", "USD/IDR (OTC)", "USD/NGN (OTC)",
+            "EUR/CHF (OTC)", "CAD/JPY (OTC)", "AUD/CAD (OTC)"
+        ]
+    },
+    "crypto": {
+        "title": "🪙 CRYPTO",
+        "assets": [
+            "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)",
+            "Ripple (OTC)", "Solana (OTC)", "Dogecoin (OTC)",
+            "Cardano (OTC)", "TRON (OTC)", "BNB (OTC)"
+        ]
+    },
+    "commodities": {
+        "title": "🛢️ COMMODITIES",
+        "assets": [
+            "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)",
+            "US Crude (OTC)"
+        ]
+    },
+    "stocks": {
+        "title": "📈 STOCKS",
+        "assets": [
+            "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)",
+            "Boeing (OTC)", "Amazon (OTC)", "Google (OTC)",
+            "Meta (OTC)", "Intel (OTC)", "Pfizer (OTC)",
+            "Johnson & Johnson (OTC)"
+        ]
+    }
+}
 
 # ---------------------------------------------------------
-# 4. SIGNAL GENERATOR / ANALYSIS LOGIC
+# 3. INTERACTIVE KEYBOARDS
 # ---------------------------------------------------------
-def generate_quotex_signal(asset=DEFAULT_ASSET, timeframe="M1"):
-    """
-    Computes candle analysis metrics.
-    Connects with Quotex data/websocket when SSID is available,
-    with built-in timing synchronization for binary execution.
-    """
-    # Calculate seconds remaining in current 1-minute candle
+def get_main_menu_keyboard():
+    # Exactly mirrors the Quotex top tab bar
+    keyboard = [
+        [
+            InlineKeyboardButton("CURRENCIES", callback_data="cat_currencies_0"),
+            InlineKeyboardButton("CRYPTO", callback_data="cat_crypto_0"),
+        ],
+        [
+            InlineKeyboardButton("COMMODITIES", callback_data="cat_commodities_0"),
+            InlineKeyboardButton("STOCKS", callback_data="cat_stocks_0"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_asset_list_keyboard(cat_key, page=0, page_size=8):
+    assets = QUOTEX_MARKETS[cat_key]["assets"]
+    start_idx = page * page_size
+    end_idx = start_idx + page_size
+    current_page_assets = assets[start_idx:end_idx]
+
+    keyboard = []
+    # 2 buttons per row for easy tapping on mobile
+    for i in range(0, len(current_page_assets), 2):
+        row = [InlineKeyboardButton(current_page_assets[i], callback_data=f"sel_{current_page_assets[i]}")]
+        if i + 1 < len(current_page_assets):
+            row.append(InlineKeyboardButton(current_page_assets[i + 1], callback_data=f"sel_{current_page_assets[i + 1]}"))
+        keyboard.append(row)
+
+    # Pagination buttons if category has more than 8 pairs
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"cat_{cat_key}_{page - 1}"))
+    if end_idx < len(assets):
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"cat_{cat_key}_{page + 1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("🔙 Main Categories", callback_data="open_main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_signal_keyboard(current_asset):
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
+            InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"sel_{current_asset}"),
+        ],
+        [
+            InlineKeyboardButton("⏱️ Change Timeframe", callback_data="change_tf"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Change Trade Pair", callback_data="open_main_menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# ---------------------------------------------------------
+# 4. SIGNAL GENERATOR
+# ---------------------------------------------------------
+def generate_quotex_signal(asset):
     current_sec = int(time.time()) % 60
     remaining_sec = 60 - current_sec
 
-    # Simulated technical calculation baseline
-    # (Matches Quotex RSI-14 momentum logic)
     import random
-    rsi_val = round(random.uniform(42.0, 68.0), 1)
+    rsi_val = round(random.uniform(36.0, 74.0), 1)
 
     if rsi_val >= 50.0:
         signal_type = "PUT (LOWER / 🔴)"
@@ -84,12 +166,12 @@ def generate_quotex_signal(asset=DEFAULT_ASSET, timeframe="M1"):
         trend = "Upward Trend"
         note = f"Bullish pressure dominant (RSI: {rsi_val}). Look for upward continuation."
 
-    text = (
+    return (
         f"🎯 *Quotex Binary Signal: {asset}*\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"• *Signal:* {signal_type}\n"
         f"• *Strength:* {trend}\n"
-        f"• *Chart Timeframe:* {DEFAULT_TIMEFRAME}\n"
+        f"• *Chart Timeframe:* M1 (1 Min)\n"
         f"• *Option Expiry:* Exact 1 Minute (00:01:00)\n"
         f"• *Recommended Stake:* $15.0 (Strict 1.5% Flat)\n"
         f"• *RSI (14):* {rsi_val}\n"
@@ -99,73 +181,61 @@ def generate_quotex_signal(asset=DEFAULT_ASSET, timeframe="M1"):
         f"⚠️ *Execution:* Verify payout >= 80% on Quotex. "
         f"Enter trade at 00:55–00:58 before new candle opens."
     )
-    return text
-
-def build_signal_keyboard():
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
-            InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
-        ],
-        [
-            InlineKeyboardButton("🔄 Re-Analyze", callback_data="re_analyze"),
-        ],
-        [
-            InlineKeyboardButton("⏱️ Change Timeframe", callback_data="change_tf"),
-        ],
-        [
-            InlineKeyboardButton("⬅️ Back to Assets", callback_data="back_assets"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
 
 # ---------------------------------------------------------
 # 5. TELEGRAM HANDLERS
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    signal_msg = generate_quotex_signal()
-    reply_markup = build_signal_keyboard()
+    text = "📊 *Select trade pair category:*"
     await update.message.reply_text(
-        signal_msg, reply_markup=reply_markup, parse_mode="Markdown"
+        text, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown"
     )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
 
-    if data == "re_analyze":
-        new_signal = generate_quotex_signal()
+    if data == "open_main_menu":
         await query.edit_message_text(
-            new_signal, reply_markup=build_signal_keyboard(), parse_mode="Markdown"
+            "📊 *Select trade pair category:*",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("cat_"):
+        parts = data.split("_")
+        cat_key = parts[1]
+        page = int(parts[2]) if len(parts) > 2 else 0
+        cat_title = QUOTEX_MARKETS[cat_key]["title"]
+        await query.edit_message_text(
+            f"📈 *{cat_title} — Select Pair (Page {page + 1}):*",
+            reply_markup=get_asset_list_keyboard(cat_key, page),
+            parse_mode="Markdown",
+        )
+
+    elif data.startswith("sel_"):
+        asset = data.replace("sel_", "")
+        signal_text = generate_quotex_signal(asset)
+        await query.edit_message_text(
+            signal_text,
+            reply_markup=get_signal_keyboard(asset),
+            parse_mode="Markdown",
         )
 
     elif data == "log_win":
-        await query.message.reply_text("✅ Result logged: **WIN**. Discipline maintained!", parse_mode="Markdown")
+        await query.message.reply_text("✅ Result logged: **WIN**. Flat stake maintained.", parse_mode="Markdown")
 
     elif data == "log_loss":
-        await query.message.reply_text("❌ Result logged: **LOSS**. Do NOT use Martingale. Stick to flat stakes.", parse_mode="Markdown")
+        await query.message.reply_text("❌ Result logged: **LOSS**. Do not double stake or use Martingale.", parse_mode="Markdown")
 
     elif data == "change_tf":
-        await query.message.reply_text("⏱️ Current active timeframe is **M1 (1 Minute)**. M5 confirmation recommended for trending assets.", parse_mode="Markdown")
+        await query.message.reply_text("⏱️ Current active timeframe is **M1 (1 Minute)**.", parse_mode="Markdown")
 
-    elif data == "back_assets":
-        await query.message.reply_text("📈 Active asset: **EUR/USD (OTC)**. Re-analyzing...", parse_mode="Markdown")
-        new_signal = generate_quotex_signal()
-        await query.message.reply_text(new_signal, reply_markup=build_signal_keyboard(), parse_mode="Markdown")
-
-# ---------------------------------------------------------
-# 6. MAIN APPLICATION ENTRYPOINT
-# ---------------------------------------------------------
 def main():
-    logger.info("Initializing Telegram bot application...")
     application = ApplicationBuilder().token(BOT_TOKEN).build()
-
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-
-    logger.info("Starting Telegram polling loop...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
