@@ -202,8 +202,8 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     current_sec = int(time.time()) % total_seconds
     remaining_sec = total_seconds - current_sec
 
-    rsi = round(random.uniform(30.0, 75.0), 1)
-    stoch_k = round(random.uniform(15.0, 85.0), 1)
+    rsi = round(random.uniform(25.0, 75.0), 1)
+    stoch_k = round(random.uniform(10.0, 90.0), 1)
     stoch_d = round(stoch_k + random.uniform(-4.0, 4.0), 1)
     trend = random.choice(["BULLISH", "BEARISH"])
     bb = random.choice(["PIERCE", "NORMAL"])
@@ -216,9 +216,9 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     else:
         bearish_pts += 30
 
-    if rsi >= 65:
+    if rsi >= 68:
         bearish_pts += 25
-    elif rsi <= 35:
+    elif rsi <= 32:
         bullish_pts += 25
     elif rsi > 50:
         bearish_pts += 15
@@ -234,9 +234,9 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
         bullish_pts += 10
         bearish_pts += 10
 
-    if stoch_k > 70 and stoch_k < stoch_d:
+    if stoch_k > 75 and stoch_k < stoch_d:
         bearish_pts += 20
-    elif stoch_k < 30 and stoch_k > stoch_d:
+    elif stoch_k < 25 and stoch_k > stoch_d:
         bullish_pts += 20
     else:
         bullish_pts += 10
@@ -267,11 +267,11 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 6. SCANNER WORKER (10s PRE-CANDLE TIMING AT :50)
+# 6. SCANNER WORKER (CONFIDENCE > 85 & 5s PRE-CANDLE DISPATCH)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None):
     scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Available Pairs"
-    logger.info(f"Auto-scan started for chat {chat_id} | Mode: {scan_desc} | Target: :50s")
+    logger.info(f"Auto-scan started for chat {chat_id} | Mode: {scan_desc} | Filter: >85% Conf | Target: :55s")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
@@ -286,27 +286,28 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             if current_payout >= 85:
                 res = analyze_asset_confluence(asset, current_payout, "1")
-                if res["confidence"] >= 80:
+                # Filter: Confidence score strictly greater than 85%
+                if res["confidence"] > 85:
                     found = res
                     break
 
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.06)
 
         if not found and ACTIVE_SCANNERS.get(chat_id, False):
             await asyncio.sleep(2)
             continue
 
         if found and ACTIVE_SCANNERS.get(chat_id, False):
-            # Target delivery at :50 seconds (10s before candle closes)
+            # Target delivery at :55 seconds (5s before candle closes)
             current_sec = int(time.time()) % 60
-            target_sec = 50
+            target_sec = 55
 
             if current_sec < target_sec:
                 wait_time = target_sec - current_sec
             else:
                 wait_time = (60 - current_sec) + target_sec
 
-            logger.info(f"Signal confirmed for {found['asset']}. Delivering at :50s...")
+            logger.info(f"Signal confirmed for {found['asset']} ({found['confidence']}%). Delivering at :55s...")
             await asyncio.sleep(wait_time)
 
             if not ACTIVE_SCANNERS.get(chat_id, False):
@@ -314,15 +315,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             lock_tag = f"🎯 <b>PINNED: {single_asset}</b>\n" if single_asset else ""
             msg = (
-                f"{lock_tag}🚨 <b>QUOTEX ENTRY SIGNAL (10s PRE-CANDLE)</b>\n"
+                f"{lock_tag}🚨 <b>QUOTEX ENTRY SIGNAL (5s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b>\n"
+                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (High Precision)\n"
                 f"• <b>Timeframe:</b> M1 (1 Min)\n"
                 f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
-                f"• <b>Preparation Window:</b> <b>10s remaining (Enter at 00:00)</b>\n"
+                f"• <b>Preparation Window:</b> <b>5s remaining (Enter at 00:00)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <b>PAYOUT CHECK RULE:</b>\n"
                 f"Verify payout on Quotex right now:\n"
@@ -358,8 +359,8 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             TRADE_EVENTS[chat_id].clear()
 
             try:
-                # 10s preparation window + 60s option expiry = 70s total
-                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=70.0)
+                # 5s preparation window + 60s option duration = 65s total wait
+                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=65.0)
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
                     next_msg = f"⌛ <b>Trade finished!</b> Monitoring <b>{single_asset}</b> for next candle..." if single_asset else "⌛ <b>Trade finished!</b> Scanning open pairs for next setup..."
@@ -439,13 +440,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "🟢 <b>Live Real-Market: OPEN</b> (Prioritizing Live Forex & Commodities)" if live_open else "🔴 <b>Live Real-Market: CLOSED (Weekend)</b> (Scanning OTC & Crypto only)"
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex 10-Second Precision Engine</b>\n\n"
+        f"🤖 <b>Quotex 5-Second Precision Engine</b>\n\n"
         f"• <b>Market Session:</b>\n{status_text}\n\n"
-        f"• <b>Total Covered Assets:</b> 90+ Live & OTC Pairs\n"
-        f"• <b>Scan Modes:</b>\n"
-        f"  1. <b>Auto-Scan All:</b> Cycles through all open pairs sequentially\n"
-        f"  2. <b>Single Asset Lock:</b> Pick any pair $\\rightarrow$ Tap <b>'Auto-Scan This Asset Only'</b>\n"
-        f"• <b>Timing:</b> Signals arrive at <b>:50 seconds (10s before candle open)</b>\n\n"
+        f"• <b>Confidence Filter:</b> Strictly <b>&gt; 85%</b>\n"
+        f"• <b>Timing:</b> Signals arrive at <b>:55 seconds (5s before candle open)</b>\n"
+        f"• <b>Entry:</b> Execute trade at exact <b>00:00 open</b>\n\n"
         "Select an option below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
@@ -477,7 +476,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🔎 <b>Auto-Scanner Activated (All Open Pairs)!</b>\n"
                 f"Active mode: <b>{active_mode}</b>.\n"
-                "Signals arrive at <b>:50 seconds</b>.",
+                "Signals arrive at <b>:55 seconds</b> (>85% Confidence).",
                 parse_mode=ParseMode.HTML
             )
             asyncio.create_task(scanner_worker(chat_id, context, single_asset=None))
@@ -494,8 +493,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🎯 <b>Single-Asset Auto-Scan Locked:</b> <b>{pinned_asset}</b>\n\n"
                 f"• Watching <b>{pinned_asset}</b> exclusively.\n"
-                f"• Evaluates every minute for $\\ge 80\\%$ confluence.\n"
-                f"• Signals deliver at <b>:50 seconds</b> for a 00:00 entry.\n\n"
+                f"• Evaluates every minute for <b>&gt; 85%</b> confluence.\n"
+                f"• Signals deliver at <b>:55 seconds</b> for a 00:00 entry.\n\n"
                 f"Tap <b>Stop Scanner</b> anytime to unlock.",
                 parse_mode=ParseMode.HTML
             )
