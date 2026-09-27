@@ -85,37 +85,68 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 # ---------------------------------------------------------
-# 3. COMPLETE ASSET DIRECTORY (LIVE REAL MARKET + OTC)
+# 3. EXHAUSTIVE QUOTEX ASSET DIRECTORY (ALL LIVE + OTC)
 # ---------------------------------------------------------
+# 1. LIVE FOREX (Real Market - Mon to Fri)
 LIVE_FOREX_ASSETS = [
-    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD",
-    "NZD/USD", "USD/CAD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
-    "AUD/CAD", "AUD/JPY", "CAD/JPY", "EUR/AUD", "EUR/CAD",
-    "GBP/AUD", "GBP/CAD", "NZD/JPY", "USD/NOK", "USD/SEK", "USD/SGD"
+    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
+    "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
+    "AUD/CAD", "AUD/JPY", "CAD/JPY", "CHF/JPY", "EUR/AUD",
+    "EUR/CAD", "EUR/CHF", "EUR/NZD", "GBP/AUD", "GBP/CAD",
+    "GBP/CHF", "GBP/NZD", "NZD/CAD", "NZD/CHF", "NZD/JPY",
+    "AUD/CHF", "AUD/NZD", "CAD/CHF", "USD/NOK", "USD/SEK",
+    "USD/SGD", "USD/MXN", "USD/ZAR"
 ]
 
+# 2. OTC FOREX (24/7 & Weekends)
 OTC_FOREX_ASSETS = [
     "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)", "USD/CHF (OTC)",
-    "AUD/USD (OTC)", "NZD/USD (OTC)", "USD/CAD (OTC)", "EUR/GBP (OTC)",
+    "USD/CAD (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)", "EUR/GBP (OTC)",
     "EUR/JPY (OTC)", "GBP/JPY (OTC)", "USD/INR (OTC)", "USD/PKR (OTC)",
     "USD/BDT (OTC)", "USD/BRL (OTC)", "USD/TRY (OTC)", "USD/EGP (OTC)",
-    "USD/IDR (OTC)", "USD/NGN (OTC)", "AUD/CAD (OTC)", "CAD/JPY (OTC)"
+    "USD/IDR (OTC)", "USD/NGN (OTC)", "USD/MXN (OTC)", "USD/ARS (OTC)",
+    "USD/COP (OTC)", "USD/DZD (OTC)", "USD/PHP (OTC)", "AUD/CAD (OTC)",
+    "AUD/CHF (OTC)", "AUD/JPY (OTC)", "AUD/NZD (OTC)", "CAD/CHF (OTC)",
+    "CAD/JPY (OTC)", "CHF/JPY (OTC)", "EUR/AUD (OTC)", "EUR/CAD (OTC)",
+    "EUR/CHF (OTC)", "EUR/NZD (OTC)", "GBP/AUD (OTC)", "GBP/CAD (OTC)",
+    "GBP/CHF (OTC)", "GBP/NZD (OTC)", "NZD/CAD (OTC)", "NZD/CHF (OTC)",
+    "NZD/JPY (OTC)"
 ]
 
-COMMODITIES_LIVE = ["Gold", "Silver", "UK Brent", "US Crude"]
-COMMODITIES_OTC = ["Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)"]
+# 3. COMMODITIES (Live + OTC)
+COMMODITIES_LIVE = [
+    "Gold", "Silver", "UK Brent", "US Crude"
+]
+COMMODITIES_OTC = [
+    "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)"
+]
 
-STOCKS_LIVE = ["Apple", "Microsoft", "Tesla", "Boeing", "Amazon", "Google", "Meta", "Intel", "Pfizer"]
-STOCKS_OTC = ["Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)", "Amazon (OTC)", "Google (OTC)", "Meta (OTC)", "Intel (OTC)", "Pfizer (OTC)"]
+# 4. CRYPTO (24/7 Available)
+CRYPTO_ASSETS = [
+    "Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana",
+    "Cardano", "Dogecoin", "TRON", "BNB", "Shiba Inu",
+    "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Ripple (OTC)"
+]
 
-CRYPTO_24_7 = ["Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana", "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Dogecoin (OTC)"]
+# 5. STOCKS & EQUITIES (Live + OTC)
+STOCKS_LIVE = [
+    "Apple", "Microsoft", "Tesla", "Boeing", "Amazon",
+    "Google", "Meta", "Intel", "Pfizer", "Johnson & Johnson",
+    "McDonald's", "American Express"
+]
+STOCKS_OTC = [
+    "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)",
+    "Amazon (OTC)", "Google (OTC)", "Meta (OTC)", "Intel (OTC)",
+    "Pfizer (OTC)", "Johnson & Johnson (OTC)", "McDonald's (OTC)",
+    "American Express (OTC)", "Facebook (OTC)"
+]
 
 QUOTEX_MARKETS = {
-    "live_forex": {"title": "🌐 LIVE FOREX (Mon-Fri)", "assets": LIVE_FOREX_ASSETS},
-    "otc_forex": {"title": "💱 OTC FOREX (24/7)", "assets": OTC_FOREX_ASSETS},
+    "live_forex": {"title": "🌐 LIVE FOREX (33 Pairs)", "assets": LIVE_FOREX_ASSETS},
+    "otc_forex": {"title": "💱 OTC FOREX (41 Pairs)", "assets": OTC_FOREX_ASSETS},
     "commodities": {"title": "🛢️ COMMODITIES", "assets": COMMODITIES_LIVE + COMMODITIES_OTC},
-    "crypto": {"title": "🪙 CRYPTO (24/7)", "assets": CRYPTO_24_7},
-    "stocks": {"title": "📈 STOCKS", "assets": STOCKS_LIVE + STOCKS_OTC},
+    "crypto": {"title": "🪙 CRYPTO (24/7)", "assets": CRYPTO_ASSETS},
+    "stocks": {"title": "📈 STOCKS & EQUITIES", "assets": STOCKS_LIVE + STOCKS_OTC},
 }
 
 DEFAULT_FALLBACK_PAYOUTS = {
@@ -132,13 +163,17 @@ TIMEFRAME_CONFIG = {
     "5": {"label": "M5 (5 Min)", "seconds": 300, "expiry": "Exact 5 Minutes (00:05:00)"},
 }
 
-ACTIVE_SCANNERS = {}
-TRADE_EVENTS = {}
+ACTIVE_SCANNERS = {}  # {chat_id: bool}
+TRADE_EVENTS = {}     # {chat_id: asyncio.Event}
 
 # ---------------------------------------------------------
 # 4. GLOBAL MARKET SCHEDULE ENGINE (UTC)
 # ---------------------------------------------------------
 def is_live_market_open() -> bool:
+    """
+    Forex and Stock live markets open Sunday 21:00 UTC and close Friday 21:00 UTC.
+    Returns False during weekend shutdown.
+    """
     now = datetime.now(timezone.utc)
     weekday = now.weekday()
     hour = now.hour
@@ -154,9 +189,9 @@ def is_live_market_open() -> bool:
 
 def get_current_scan_pool():
     if is_live_market_open():
-        return LIVE_FOREX_ASSETS + COMMODITIES_LIVE + STOCKS_LIVE + CRYPTO_24_7 + OTC_FOREX_ASSETS
+        return LIVE_FOREX_ASSETS + COMMODITIES_LIVE + STOCKS_LIVE + CRYPTO_ASSETS + OTC_FOREX_ASSETS
     else:
-        return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_24_7
+        return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_ASSETS
 
 # ---------------------------------------------------------
 # 5. CONFLUENCE & DYNAMIC PAYOUT EXTRACTION
@@ -220,7 +255,7 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     signal = "PUT (LOWER / 🔴)" if bearish_pts > bullish_pts else "CALL (HIGHER / 🟢)"
 
     is_live = "(OTC)" not in asset
-    market_tag = "🌐 Live Real Market" if is_live else "💱 OTC Weekend / 24/7 Market"
+    market_tag = "🌐 Live Real Market" if is_live else "💱 OTC Market"
 
     notes = (
         f"• <b>Market Type:</b> {market_tag}\n"
@@ -241,15 +276,16 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 6. AUTO-SCANNER WORKER (15s PRE-CANDLE DISPATCH)
+# 6. SCANNER WORKER (15s TIMING & INSTANT SKIP)
 # ---------------------------------------------------------
-async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Auto-scan started for chat {chat_id} (Target timing: :45s).")
+async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None):
+    scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Available Pairs"
+    logger.info(f"Auto-scan started for chat {chat_id} | Mode: {scan_desc} | Target: :45s")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
         found = None
-        current_assets = get_current_scan_pool()
+        current_assets = [single_asset] if single_asset else get_current_scan_pool()
 
         for asset in current_assets:
             if not ACTIVE_SCANNERS.get(chat_id, False):
@@ -263,13 +299,14 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     found = res
                     break
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.08)
 
         if not found and ACTIVE_SCANNERS.get(chat_id, False):
             await asyncio.sleep(2)
             continue
 
         if found and ACTIVE_SCANNERS.get(chat_id, False):
+            # Target delivery at :45 seconds (15s before candle closes)
             current_sec = int(time.time()) % 60
             target_sec = 45
 
@@ -278,14 +315,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             else:
                 wait_time = (60 - current_sec) + target_sec
 
-            logger.info(f"Signal found for {found['asset']}. Holding {wait_time}s to deliver at :45...")
+            logger.info(f"Signal confirmed for {found['asset']}. Delivering at :45s...")
             await asyncio.sleep(wait_time)
 
             if not ACTIVE_SCANNERS.get(chat_id, False):
                 break
 
+            lock_tag = f"🎯 <b>PINNED: {single_asset}</b>\n" if single_asset else ""
             msg = (
-                f"🚨 <b>QUOTEX ENTRY SIGNAL (15s PRE-CANDLE)</b>\n"
+                f"{lock_tag}🚨 <b>QUOTEX ENTRY SIGNAL (15s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
@@ -296,9 +334,9 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 f"• <b>Preparation Window:</b> <b>15s remaining (Enter at 00:00)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <b>PAYOUT CHECK RULE:</b>\n"
-                f"Look at the payout on Quotex right now:\n"
+                f"Verify payout on Quotex right now:\n"
                 f"• If <b>&gt;= 85%</b> $\\rightarrow$ Enter trade at 00:00\n"
-                f"• If <b>&lt; 85%</b> $\\rightarrow$ Tap <b>Skip</b> below to scan next\n"
+                f"• If <b>&lt; 85%</b> $\\rightarrow$ Tap <b>Skip</b> below to wait for next\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence:</b>\n"
                 f"{found['notes']}\n"
@@ -319,6 +357,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ])
 
+            # Normal dispatch without loud forced override
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=msg,
@@ -332,9 +371,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=75.0)
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
+                    next_msg = f"⌛ <b>Trade finished!</b> Monitoring <b>{single_asset}</b> for next candle..." if single_asset else "⌛ <b>Trade finished!</b> Scanning open pairs for next setup..."
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text="⌛ <b>Trade finished!</b> Scanning open pairs for next setup...",
+                        text=next_msg,
                         parse_mode=ParseMode.HTML
                     )
             
@@ -346,7 +386,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Start Auto-Scan (Auto-Detect Open)", callback_data="start_scan"),
+            InlineKeyboardButton("▶️ Start Auto-Scan (All Open Pairs)", callback_data="start_scan"),
             InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan"),
         ],
         [
@@ -358,7 +398,7 @@ def get_main_menu_keyboard():
             InlineKeyboardButton("🪙 CRYPTO", callback_data="cat_crypto_0"),
         ],
         [
-            InlineKeyboardButton("📈 STOCKS", callback_data="cat_stocks_0"),
+            InlineKeyboardButton("📈 STOCKS & EQUITIES", callback_data="cat_stocks_0"),
         ]
     ])
 
@@ -389,14 +429,14 @@ def get_asset_list_keyboard(cat_key, page=0, page_size=6):
 def get_signal_keyboard(current_asset, tf_key):
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} Only", callback_data=f"lock_{current_asset}"),
+        ],
+        [
             InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
             InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
         ],
         [
-            InlineKeyboardButton("⏭️ Skip (Payout < 85%)", callback_data="skip_signal"),
-        ],
-        [
-            InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"sel_{current_asset}_{tf_key}"),
+            InlineKeyboardButton("🔄 Re-Analyze Now", callback_data=f"sel_{current_asset}_{tf_key}"),
         ],
         [
             InlineKeyboardButton("⬅️ Back to Menu", callback_data="open_main_menu"),
@@ -409,11 +449,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"🤖 <b>Quotex 15-Second Precision Engine</b>\n\n"
-        f"• <b>Market Session Status:</b>\n{status_text}\n\n"
-        f"• <b>Timing:</b> Alerts arrive at <b>:45 seconds (15s before candle)</b>\n"
-        f"• <b>Entry:</b> Execute trade at exact <b>00:00 open</b>\n"
-        f"• <b>Filter:</b> Minimum <b>80% Confidence</b> & <b>85% Payout</b>\n\n"
-        "Tap below to begin:",
+        f"• <b>Market Session:</b>\n{status_text}\n\n"
+        f"• <b>Total Covered Assets:</b> 90+ Live & OTC Pairs\n"
+        f"• <b>Scan Modes:</b>\n"
+        f"  1. <b>Auto-Scan All:</b> Cycles through all open pairs sequentially\n"
+        f"  2. <b>Single Asset Lock:</b> Pick any pair $\\rightarrow$ Tap <b>'Auto-Scan This Asset Only'</b>\n"
+        f"• <b>Timing:</b> Signals arrive at <b>:45 seconds (15s before candle)</b>\n\n"
+        "Select an option below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -434,31 +476,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data == "start_scan":
             if ACTIVE_SCANNERS.get(chat_id, False):
-                await query.message.reply_text("⚠️ Scanner is already active!")
+                await query.message.reply_text("⚠️ Scanner is already active! Tap Stop Scanner first.")
                 return
 
             ACTIVE_SCANNERS[chat_id] = True
             live_open = is_live_market_open()
-            active_mode = "Live Real Market Pairs" if live_open else "Weekend OTC & Crypto Pairs"
+            active_mode = "All Live Real Market Pairs" if live_open else "All Weekend OTC & Crypto Pairs"
 
             await query.message.reply_text(
-                f"🔎 <b>Auto-Scanner Activated!</b>\n"
+                f"🔎 <b>Auto-Scanner Activated (All Open Pairs)!</b>\n"
                 f"Active mode: <b>{active_mode}</b>.\n"
-                "Signals will arrive at <b>:45 seconds</b>.",
+                "Signals arrive at <b>:45 seconds</b>.",
                 parse_mode=ParseMode.HTML
             )
-            asyncio.create_task(scanner_worker(chat_id, context))
+            asyncio.create_task(scanner_worker(chat_id, context, single_asset=None))
+
+        elif data.startswith("lock_"):
+            pinned_asset = data.replace("lock_", "")
+            
+            ACTIVE_SCANNERS[chat_id] = False
+            if chat_id in TRADE_EVENTS:
+                TRADE_EVENTS[chat_id].set()
+            await asyncio.sleep(0.5)
+
+            ACTIVE_SCANNERS[chat_id] = True
+            await query.message.reply_text(
+                f"🎯 <b>Single-Asset Auto-Scan Locked:</b> <b>{pinned_asset}</b>\n\n"
+                f"• Watching <b>{pinned_asset}</b> exclusively.\n"
+                f"• Every minute, it evaluates the candle for $\\ge 80\\%$ confluence.\n"
+                f"• Signals deliver at <b>:45 seconds</b> for a 00:00 entry.\n\n"
+                f"Tap <b>Stop Scanner</b> anytime to unlock.",
+                parse_mode=ParseMode.HTML
+            )
+            asyncio.create_task(scanner_worker(chat_id, context, single_asset=pinned_asset))
 
         elif data == "stop_scan":
             ACTIVE_SCANNERS[chat_id] = False
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
-            await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Tap Start to resume.", parse_mode=ParseMode.HTML)
+            await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Send /start to resume.", parse_mode=ParseMode.HTML)
 
         elif data == "skip_signal":
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
-            await query.message.reply_text("⏭️ <b>Signal skipped.</b> Scanning next pair immediately...", parse_mode=ParseMode.HTML)
+            await query.message.reply_text("⏭️ <b>Signal skipped.</b> Resuming scan immediately...", parse_mode=ParseMode.HTML)
 
         elif data == "log_win":
             await query.message.reply_text("✅ Result logged: <b>WIN</b>. Flat stake discipline maintained.", parse_mode=ParseMode.HTML)
@@ -497,7 +558,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 <b>Technical Confluence:</b>\n"
                 f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"⚠️ <b>Rule:</b> Verify payout &gt;= 85% on Quotex. Enter at 00:00 open."
+                f"💡 <i>Tip: Tap button below to continuously scan this pair!</i>"
             )
             await query.edit_message_text(
                 signal_text,
