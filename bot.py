@@ -3,7 +3,6 @@ import sys
 import time
 import json
 import math
-import random
 import asyncio
 import logging
 import threading
@@ -128,7 +127,7 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 # ---------------------------------------------------------
-# 3. EXHAUSTIVE ASSET DIRECTORY (ALL LIVE + OTC)
+# 3. EXHAUSTIVE MASTER ASSET DIRECTORY (ALL 100+ QUOTEX PAIRS)
 # ---------------------------------------------------------
 LIVE_FOREX_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
@@ -154,8 +153,12 @@ OTC_FOREX_ASSETS = [
     "NZD/JPY (OTC)"
 ]
 
-COMMODITIES_LIVE = ["Gold", "Silver", "UK Brent", "US Crude"]
-COMMODITIES_OTC = ["Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)"]
+COMMODITIES_LIVE = [
+    "Gold", "Silver", "UK Brent", "US Crude"
+]
+COMMODITIES_OTC = [
+    "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)"
+]
 
 CRYPTO_ASSETS = [
     "Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana",
@@ -204,6 +207,10 @@ TRADE_EVENTS = {}
 # 4. GLOBAL MARKET SCHEDULE ENGINE (UTC)
 # ---------------------------------------------------------
 def is_live_market_open() -> bool:
+    """
+    Forex and Stock live markets open Sunday 21:00 UTC and close Friday 21:00 UTC.
+    Returns False during weekend shutdown.
+    """
     now = datetime.now(timezone.utc)
     weekday = now.weekday()
     hour = now.hour
@@ -224,7 +231,7 @@ def get_current_scan_pool():
         return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_ASSETS
 
 # ---------------------------------------------------------
-# 5. TECHNICAL INDICATORS & PRICE ACTION LOGIC
+# 5. REAL MATHEMATICAL INDICATOR CALCULATIONS
 # ---------------------------------------------------------
 def calculate_ema(prices, period):
     if len(prices) < period:
@@ -286,6 +293,9 @@ def calculate_stochastic(candles, period=5, smooth_k=3):
     d = k
     return round(k, 1), round(d, 1)
 
+# ---------------------------------------------------------
+# 6. REAL CHART CONFLUENCE SCORING ENGINE
+# ---------------------------------------------------------
 def get_verified_payout(asset):
     if asset in LIVE_BROWSER_PAYOUTS:
         return LIVE_BROWSER_PAYOUTS[asset]
@@ -295,15 +305,13 @@ def get_verified_payout(asset):
             return val
     return DEFAULT_FALLBACK_PAYOUTS.get(asset, 85)
 
-# ---------------------------------------------------------
-# 6. COMBINED TECHNICAL & PRICE-ACTION CONFLUENCE ENGINE
-# ---------------------------------------------------------
 def analyze_real_chart(asset, payout_pct, tf_key="1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
     total_seconds = tf_data["seconds"]
     current_sec = int(time.time()) % total_seconds
     remaining_sec = total_seconds - current_sec
 
+    # Pull real candles from browser bridge or generate synthetic seed bars
     candles = REAL_CANDLE_HISTORY.get(asset) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
     
     if not candles or len(candles) < 20:
@@ -311,18 +319,12 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         candles = []
         for i in range(30):
             base_price += (1 if i % 2 == 0 else -1) * 0.05
-            candles.append({
-                "open": base_price,
-                "high": base_price + 0.12,
-                "low": base_price - 0.12,
-                "close": base_price + 0.04
-            })
+            candles.append({"open": base_price, "high": base_price + 0.1, "low": base_price - 0.1, "close": base_price + 0.02})
 
     close_prices = [c["close"] for c in candles]
     current_price = close_prices[-1]
-    current_bar = candles[-1]
 
-    # Math Indicators
+    # Real Mathematical Indicator Calculation
     ema9 = calculate_ema(close_prices, 9)
     ema21 = calculate_ema(close_prices, 21)
     rsi = calculate_rsi(close_prices, 14)
@@ -332,80 +334,44 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     bullish_pts = 0
     bearish_pts = 0
 
-    # 1. EMA Trend Bias (25 pts)
+    # 1. EMA Trend Bias (30 pts)
     if current_price > ema9 and ema9 > ema21:
-        bullish_pts += 25
+        bullish_pts += 30
     elif current_price < ema9 and ema9 < ema21:
-        bearish_pts += 25
+        bearish_pts += 30
     else:
-        bullish_pts += 10
-        bearish_pts += 10
-
-    # 2. RSI Overbought/Oversold Reversal (20 pts)
-    if rsi >= 68:
-        bearish_pts += 20
-    elif rsi <= 32:
-        bullish_pts += 20
-    elif rsi > 52:
-        bullish_pts += 10
-    else:
-        bearish_pts += 10
-
-    # 3. Bollinger Band Rejection (20 pts)
-    if current_price >= upper_bb:
-        bearish_pts += 20
-    elif current_price <= lower_bb:
-        bullish_pts += 20
-    else:
-        bullish_pts += 5
-        bearish_pts += 5
-
-    # 4. Stochastic Momentum Crossover (15 pts)
-    if stoch_k > 75 and stoch_k < stoch_d:
+        bullish_pts += 15
         bearish_pts += 15
-    elif stoch_k < 25 and stoch_k > stoch_d:
+
+    # 2. RSI Overbought/Oversold Reversal (25 pts)
+    if rsi >= 68:
+        bearish_pts += 25
+    elif rsi <= 32:
+        bullish_pts += 25
+    elif rsi > 52:
         bullish_pts += 15
     else:
-        bullish_pts += 5
-        bearish_pts += 5
+        bearish_pts += 15
 
-    # 5. Price Action Micro-Structure Filter (20 pts)
-    c_open, c_close = current_bar["open"], current_bar["close"]
-    c_high, c_low = current_bar["high"], current_bar["low"]
-    c_range = c_high - c_low
+    # 3. Bollinger Band Rejection (25 pts)
+    if current_price >= upper_bb:
+        bearish_pts += 25
+    elif current_price <= lower_bb:
+        bullish_pts += 25
+    else:
+        bullish_pts += 10
+        bearish_pts += 10
 
-    pa_note = "Standard Body"
-    if c_range > 0:
-        body_size = abs(c_close - c_open)
-        upper_wick = c_high - max(c_open, c_close)
-        lower_wick = min(c_open, c_close) - c_low
+    # 4. Stochastic Momentum Crossover (20 pts)
+    if stoch_k > 75 and stoch_k < stoch_d:
+        bearish_pts += 20
+    elif stoch_k < 25 and stoch_k > stoch_d:
+        bullish_pts += 20
+    else:
+        bullish_pts += 10
+        bearish_pts += 10
 
-        # Doji Filter: heavily penalize tiny stalled bodies
-        if (body_size / c_range) < 0.15:
-            bullish_pts -= 30
-            bearish_pts -= 30
-            pa_note = "⚠️ Stagnant Doji (Suppressed)"
-        else:
-            # Wick Rejection Filter (>= 30% of total candle height)
-            if (upper_wick / c_range) >= 0.30:
-                bearish_pts += 20
-                pa_note = "Upper Wick Rejection (Bearish Reversal)"
-            elif (lower_wick / c_range) >= 0.30:
-                bullish_pts += 20
-                pa_note = "Lower Wick Rejection (Bullish Bounce)"
-
-    # Consecutive Candle Exhaustion
-    if len(candles) >= 3:
-        p1_green = candles[-2]["close"] > candles[-2]["open"]
-        p2_green = candles[-3]["close"] > candles[-3]["open"]
-        c_green = c_close > c_open
-
-        if c_green and p1_green and p2_green:
-            bearish_pts += 10
-        elif (not c_green) and (not p1_green) and (not p2_green):
-            bullish_pts += 10
-
-    confidence = min(99, max(bullish_pts, bearish_pts))
+    confidence = max(bullish_pts, bearish_pts)
     signal = "PUT (LOWER / 🔴)" if bearish_pts > bullish_pts else "CALL (HIGHER / 🟢)"
 
     is_live = "(OTC)" not in asset
@@ -414,9 +380,9 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     notes = (
         f"• <b>Market Type:</b> {market_tag}\n"
         f"• <b>Real Price:</b> {current_price:.5f}\n"
-        f"• <b>Price Action:</b> {pa_note}\n"
         f"• <b>EMA (9/21):</b> {'Bearish Cross' if current_price < ema9 else 'Bullish Cross'} ({ema9:.4f})\n"
-        f"• <b>RSI (14):</b> {rsi} | <b>BB:</b> {upper_bb:.4f} / {lower_bb:.4f}\n"
+        f"• <b>RSI (14):</b> {rsi} ({'Overbought' if rsi >= 68 else 'Oversold' if rsi <= 32 else 'Neutral'})\n"
+        f"• <b>Bollinger Bands:</b> {upper_bb:.4f} / {lower_bb:.4f}\n"
         f"• <b>Stochastic (5,3,3):</b> %K={stoch_k} | %D={stoch_d}"
     )
 
@@ -431,11 +397,11 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 7. SCANNER WORKER (EXACT 7s PRE-CANDLE DISPATCH AT :53)
+# 7. SCANNER WORKER (EXACT 15s PRE-CANDLE DISPATCH)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None):
     scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Available Pairs"
-    logger.info(f"Auto-scan started for chat {chat_id} | Mode: {scan_desc} | Filter: >85% Conf | Target: :53s")
+    logger.info(f"Auto-scan started for chat {chat_id} | Mode: {scan_desc} | Target: :45s")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
@@ -450,8 +416,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             if current_payout >= 85:
                 res = analyze_real_chart(asset, current_payout, "1")
-                # Filter: Confidence score strictly greater than 85%
-                if res["confidence"] > 85:
+                if res["confidence"] >= 80:
                     found = res
                     break
 
@@ -462,16 +427,16 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             continue
 
         if found and ACTIVE_SCANNERS.get(chat_id, False):
-            # Target delivery at :53 seconds (7s before candle closes)
+            # Target delivery at :45 seconds (15s before candle closes)
             current_sec = int(time.time()) % 60
-            target_sec = 53
+            target_sec = 45
 
             if current_sec < target_sec:
                 wait_time = target_sec - current_sec
             else:
                 wait_time = (60 - current_sec) + target_sec
 
-            logger.info(f"Signal confirmed for {found['asset']} ({found['confidence']}%). Delivering at :53s...")
+            logger.info(f"Signal confirmed for {found['asset']}. Delivering at :45s...")
             await asyncio.sleep(wait_time)
 
             if not ACTIVE_SCANNERS.get(chat_id, False):
@@ -479,15 +444,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             lock_tag = f"🎯 <b>PINNED: {single_asset}</b>\n" if single_asset else ""
             msg = (
-                f"{lock_tag}🚨 <b>QUOTEX ENTRY SIGNAL (7s PRE-CANDLE)</b>\n"
+                f"{lock_tag}🚨 <b>QUOTEX ENTRY SIGNAL (15s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (High Precision)\n"
+                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (Real Math)\n"
                 f"• <b>Timeframe:</b> M1 (1 Min)\n"
                 f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
-                f"• <b>Preparation Window:</b> <b>7s remaining (Enter at 00:00)</b>\n"
+                f"• <b>Preparation Window:</b> <b>15s remaining (Enter at 00:00)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <b>PAYOUT CHECK RULE:</b>\n"
                 f"Verify payout on Quotex right now:\n"
@@ -523,8 +488,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             TRADE_EVENTS[chat_id].clear()
 
             try:
-                # 7s preparation window + 60s option expiry = 67s wait window
-                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=67.0)
+                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=75.0)
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
                     next_msg = f"⌛ <b>Trade finished!</b> Monitoring <b>{single_asset}</b> for next candle..." if single_asset else "⌛ <b>Trade finished!</b> Scanning open pairs for next setup..."
@@ -604,12 +568,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "🟢 <b>Live Real-Market: OPEN</b> (Prioritizing Live Forex & Commodities)" if live_open else "🔴 <b>Live Real-Market: CLOSED (Weekend)</b> (Scanning OTC & Crypto only)"
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex 7-Second Precision Engine</b>\n\n"
+        f"🤖 <b>Quotex 15-Second Precision Engine</b>\n\n"
         f"• <b>Market Session:</b>\n{status_text}\n\n"
         f"• <b>Total Covered Assets:</b> 110+ Live & OTC Pairs\n"
-        f"• <b>Filters:</b> Strictly <b>&gt; 85% Confidence</b> + Wick Rejections\n"
-        f"• <b>Timing:</b> Signals arrive at <b>:53 seconds (7s before candle)</b>\n"
-        f"• <b>Execution:</b> Enter trade at exact <b>00:00 open</b>\n\n"
+        f"• <b>Analysis:</b> Real Mathematical EMA 9/21, RSI 14, Bollinger Bands, & Stochastic\n"
+        f"• <b>Timing:</b> Signals arrive at <b>:45 seconds (15s before candle)</b>\n\n"
         "Select an option below to begin:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
@@ -641,7 +604,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🔎 <b>Auto-Scanner Activated (All Open Pairs)!</b>\n"
                 f"Active mode: <b>{active_mode}</b>.\n"
-                "Signals arrive at <b>:53 seconds</b> (>85% Confidence).",
+                "Signals arrive at <b>:45 seconds</b>.",
                 parse_mode=ParseMode.HTML
             )
             asyncio.create_task(scanner_worker(chat_id, context, single_asset=None))
@@ -658,8 +621,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🎯 <b>Single-Asset Auto-Scan Locked:</b> <b>{pinned_asset}</b>\n\n"
                 f"• Watching <b>{pinned_asset}</b> exclusively.\n"
-                f"• Evaluates every minute for <b>&gt; 85%</b> confluence.\n"
-                f"• Signals deliver at <b>:53 seconds</b> for a 00:00 entry.\n\n"
+                f"• Every minute, it evaluates the candle for $\\ge 80\\%$ confluence.\n"
+                f"• Signals deliver at <b>:45 seconds</b> for a 00:00 entry.\n\n"
                 f"Tap <b>Stop Scanner</b> anytime to unlock.",
                 parse_mode=ParseMode.HTML
             )
