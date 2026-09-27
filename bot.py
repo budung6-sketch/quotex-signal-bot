@@ -1,11 +1,12 @@
 import os
 import sys
 import time
-from datetime import datetime, timezone
+import json
 import random
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -18,7 +19,7 @@ from telegram.ext import (
 )
 
 # ---------------------------------------------------------
-# 1. RENDER HEALTH CHECK & BROWSER BRIDGE
+# 1. RENDER KEEP-ALIVE SERVER & BROWSER BRIDGE
 # ---------------------------------------------------------
 LIVE_BROWSER_PAYOUTS = {}
 
@@ -27,7 +28,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quotex Engine Online.")
+        count = len(LIVE_BROWSER_PAYOUTS)
+        self.wfile.write(f"Quotex Engine Online. Synced pairs: {count}".encode("utf-8"))
 
     def do_POST(self):
         global LIVE_BROWSER_PAYOUTS
@@ -83,7 +85,7 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 # ---------------------------------------------------------
-# 3. COMPLETE ASSET DIRECTORY (LIVE + OTC)
+# 3. COMPLETE ASSET DIRECTORY (LIVE REAL MARKET + OTC)
 # ---------------------------------------------------------
 LIVE_FOREX_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD",
@@ -108,7 +110,6 @@ STOCKS_OTC = ["Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)", "
 
 CRYPTO_24_7 = ["Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana", "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Dogecoin (OTC)"]
 
-# Master categorised directory for manual browsing
 QUOTEX_MARKETS = {
     "live_forex": {"title": "🌐 LIVE FOREX (Mon-Fri)", "assets": LIVE_FOREX_ASSETS},
     "otc_forex": {"title": "💱 OTC FOREX (24/7)", "assets": OTC_FOREX_ASSETS},
@@ -135,44 +136,30 @@ ACTIVE_SCANNERS = {}
 TRADE_EVENTS = {}
 
 # ---------------------------------------------------------
-# 4. GLOBAL MARKET HOURS ENGINE (UTC)
+# 4. GLOBAL MARKET SCHEDULE ENGINE (UTC)
 # ---------------------------------------------------------
 def is_live_market_open() -> bool:
-    """
-    Forex and Stock live markets open Sunday 21:00 UTC and close Friday 21:00 UTC.
-    Returns False during weekend shutdown.
-    """
     now = datetime.now(timezone.utc)
-    weekday = now.weekday()  # Monday is 0, Sunday is 6
+    weekday = now.weekday()
     hour = now.hour
 
-    # Friday after 21:00 UTC -> Closed
     if weekday == 4 and hour >= 21:
         return False
-    # Saturday -> Closed all day
     if weekday == 5:
         return False
-    # Sunday before 21:00 UTC -> Closed
     if weekday == 6 and hour < 21:
         return False
 
     return True
 
 def get_current_scan_pool():
-    """
-    Dynamically picks assets that are actually open right now on Quotex.
-    """
-    live_open = is_live_market_open()
-
-    if live_open:
-        # Prioritize live real-market assets during weekdays
+    if is_live_market_open():
         return LIVE_FOREX_ASSETS + COMMODITIES_LIVE + STOCKS_LIVE + CRYPTO_24_7 + OTC_FOREX_ASSETS
     else:
-        # Weekend: Strictly scan OTC assets + 24/7 Crypto
         return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_24_7
 
 # ---------------------------------------------------------
-# 5. TECHNICAL CONFLUENCE & CONFIDENCE CALCULATION
+# 5. CONFLUENCE & DYNAMIC PAYOUT EXTRACTION
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     if asset in LIVE_BROWSER_PAYOUTS:
@@ -254,10 +241,10 @@ def analyze_asset_confluence(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 6. AUTO-SCANNER WORKER (EXACT 10s DISPATCH & SKIP)
+# 6. AUTO-SCANNER WORKER (15s PRE-CANDLE DISPATCH)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Auto-scan active for chat {chat_id}.")
+    logger.info(f"Auto-scan started for chat {chat_id} (Target timing: :45s).")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
@@ -284,21 +271,21 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
         if found and ACTIVE_SCANNERS.get(chat_id, False):
             current_sec = int(time.time()) % 60
-            target_sec = 50
+            target_sec = 45
 
             if current_sec < target_sec:
                 wait_time = target_sec - current_sec
             else:
                 wait_time = (60 - current_sec) + target_sec
 
+            logger.info(f"Signal found for {found['asset']}. Holding {wait_time}s to deliver at :45...")
             await asyncio.sleep(wait_time)
 
             if not ACTIVE_SCANNERS.get(chat_id, False):
                 break
 
             msg = (
-                f"🔔 <b>[ALERT] TRADE SIGNAL ARRIVED!</b>\n"
-                f"🚨 <b>QUOTEX ENTRY (10s PRE-CANDLE)</b>\n"
+                f"🚨 <b>QUOTEX ENTRY SIGNAL (15s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
@@ -306,7 +293,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b>\n"
                 f"• <b>Timeframe:</b> M1 (1 Min)\n"
                 f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
-                f"• <b>Countdown:</b> <b>10s window (Enter at 00:00)</b>\n"
+                f"• <b>Preparation Window:</b> <b>15s remaining (Enter at 00:00)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <b>PAYOUT CHECK RULE:</b>\n"
                 f"Look at the payout on Quotex right now:\n"
@@ -336,21 +323,19 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 text=msg,
                 reply_markup=keyboard,
-                parse_mode=ParseMode.HTML,
-                disable_notification=False
+                parse_mode=ParseMode.HTML
             )
 
             TRADE_EVENTS[chat_id].clear()
 
             try:
-                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=70.0)
+                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=75.0)
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text="⌛ <b>Trade finished!</b> Scanning open pairs for next setup...",
-                        parse_mode=ParseMode.HTML,
-                        disable_notification=True
+                        parse_mode=ParseMode.HTML
                     )
             
             await asyncio.sleep(2)
@@ -423,10 +408,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "🟢 <b>Live Real-Market: OPEN</b> (Prioritizing Live Forex & Commodities)" if live_open else "🔴 <b>Live Real-Market: CLOSED (Weekend)</b> (Scanning OTC & Crypto only)"
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex Auto-Market Engine</b>\n\n"
+        f"🤖 <b>Quotex 15-Second Precision Engine</b>\n\n"
         f"• <b>Market Session Status:</b>\n{status_text}\n\n"
-        f"• <b>Auto-Filter:</b> Automatically skips closed real pairs during weekends\n"
-        f"• <b>Timing:</b> Alerts arrive at <b>:50 seconds</b> (10s before 00:00)\n"
+        f"• <b>Timing:</b> Alerts arrive at <b>:45 seconds (15s before candle)</b>\n"
+        f"• <b>Entry:</b> Execute trade at exact <b>00:00 open</b>\n"
         f"• <b>Filter:</b> Minimum <b>80% Confidence</b> & <b>85% Payout</b>\n\n"
         "Tap below to begin:",
         reply_markup=get_main_menu_keyboard(),
@@ -459,9 +444,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🔎 <b>Auto-Scanner Activated!</b>\n"
                 f"Active mode: <b>{active_mode}</b>.\n"
-                "Signals arrive at <b>:50 seconds</b>.",
-                parse_mode=ParseMode.HTML,
-                disable_notification=True
+                "Signals will arrive at <b>:45 seconds</b>.",
+                parse_mode=ParseMode.HTML
             )
             asyncio.create_task(scanner_worker(chat_id, context))
 
@@ -469,18 +453,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ACTIVE_SCANNERS[chat_id] = False
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
-            await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Tap Start to resume.", parse_mode=ParseMode.HTML, disable_notification=True)
+            await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Tap Start to resume.", parse_mode=ParseMode.HTML)
 
         elif data == "skip_signal":
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
-            await query.message.reply_text("⏭️ <b>Signal skipped.</b> Scanning next pair immediately...", parse_mode=ParseMode.HTML, disable_notification=True)
+            await query.message.reply_text("⏭️ <b>Signal skipped.</b> Scanning next pair immediately...", parse_mode=ParseMode.HTML)
 
         elif data == "log_win":
-            await query.message.reply_text("✅ Result logged: <b>WIN</b>. Flat stake discipline maintained.", parse_mode=ParseMode.HTML, disable_notification=True)
+            await query.message.reply_text("✅ Result logged: <b>WIN</b>. Flat stake discipline maintained.", parse_mode=ParseMode.HTML)
 
         elif data == "log_loss":
-            await query.message.reply_text("❌ Result logged: <b>LOSS</b>. Next signal will be scanned.", parse_mode=ParseMode.HTML, disable_notification=True)
+            await query.message.reply_text("❌ Result logged: <b>LOSS</b>. Next signal will be scanned.", parse_mode=ParseMode.HTML)
 
         elif data.startswith("cat_"):
             parts = data.split("_")
@@ -525,7 +509,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Callback error {data}: {e}")
 
 # ---------------------------------------------------------
-# 8. MAIN APPLICATION ENTRYPOINT
+# 8. APPLICATION ENTRYPOINT
 # ---------------------------------------------------------
 def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
