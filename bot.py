@@ -1,13 +1,10 @@
 import os
 import sys
 import time
-import json
 import random
 import asyncio
 import logging
 import threading
-import re
-import websocket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -40,7 +37,7 @@ def run_health_server():
 threading.Thread(target=run_health_server, daemon=True).start()
 
 # ---------------------------------------------------------
-# 2. CONFIGURATION & HIGH-PAYOUT ASSETS
+# 2. LOGGING & CREDENTIALS
 # ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -49,102 +46,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-QUOTEX_SSID = os.environ.get("QUOTEX_SSID")
-
 if not BOT_TOKEN:
     logger.error("BOT_TOKEN is missing!")
     sys.exit(1)
 
-# Default standard Quotex OTC payout mappings (used when socket syncs)
-DEFAULT_OTC_PAYOUTS = {
-    "USD/INR (OTC)": 92,
-    "USD/PKR (OTC)": 91,
-    "USD/BDT (OTC)": 90,
-    "EUR/USD (OTC)": 89,
-    "USD/BRL (OTC)": 89,
-    "GBP/USD (OTC)": 88,
-    "USD/EGP (OTC)": 88,
-    "USD/TRY (OTC)": 87,
-    "EUR/JPY (OTC)": 87,
-    "Gold (OTC)": 86,
-    "USD/JPY (OTC)": 85,
-}
+# High-liquidity candidate pairs on Quotex
+MONITORED_ASSETS = [
+    "USD/INR (OTC)",
+    "EUR/USD (OTC)",
+    "USD/PKR (OTC)",
+    "USD/BDT (OTC)",
+    "GBP/USD (OTC)",
+    "USD/BRL (OTC)",
+    "USD/TRY (OTC)",
+    "USD/EGP (OTC)",
+    "EUR/JPY (OTC)",
+    "Gold (OTC)",
+]
 
-LIVE_QUOTEX_PAYOUTS = {}
 ACTIVE_SCANNERS = {}  # {chat_id: bool}
 
 # ---------------------------------------------------------
-# 3. WEBSOCKET SYNC
+# 3. CONFLUENCE & CONFIDENCE CALCULATION
 # ---------------------------------------------------------
-def clean_name(raw: str) -> str:
-    return raw.replace("\n", "").strip()
-
-def on_ws_message(ws, message):
-    global LIVE_QUOTEX_PAYOUTS
-    try:
-        if message == "2":
-            ws.send("3")
-            return
-
-        match = re.search(r"(\[.*\])", message)
-        if match:
-            payload = json.loads(match.group(1))
-            event = payload[0]
-            if event in ["instruments", "instruments/update", "live_payouts"]:
-                for item in payload[1]:
-                    if isinstance(item, list) and len(item) > 14:
-                        name = clean_name(item[2])
-                        try:
-                            LIVE_QUOTEX_PAYOUTS[name] = int(item[14])
-                        except:
-                            pass
-                    elif isinstance(item, dict):
-                        name = clean_name(item.get("name", ""))
-                        p = item.get("payout") or item.get("profit")
-                        if name and p:
-                            LIVE_QUOTEX_PAYOUTS[name] = int(p)
-    except Exception:
-        pass
-
-def on_ws_open(ws):
-    logger.info("Connected to Quotex WebSocket.")
-    ws.send('42["instruments/get"]')
-
-def run_ws():
-    ws_url = "wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-        "Origin": "https://qxbroker.com",
-    }
-    if QUOTEX_SSID:
-        headers["Cookie"] = f"session={QUOTEX_SSID}"
-    ws = websocket.WebSocketApp(
-        ws_url,
-        header=headers,
-        on_open=on_ws_open,
-        on_message=on_ws_message,
-        on_error=lambda ws, err: logger.warning(f"WS notice: {err}"),
-        on_close=lambda ws, c, m: time.sleep(5) or run_ws(),
-    )
-    ws.run_forever(ping_interval=20, ping_timeout=10)
-
-threading.Thread(target=run_ws, daemon=True).start()
-
-# ---------------------------------------------------------
-# 4. CONFLUENCE & CONFIDENCE CALCULATION
-# ---------------------------------------------------------
-def get_payout(asset):
-    # Use live socket value if available; otherwise use default OTC schedule
-    if asset in LIVE_QUOTEX_PAYOUTS:
-        return LIVE_QUOTEX_PAYOUTS[asset]
-    for key, val in LIVE_QUOTEX_PAYOUTS.items():
-        if asset.replace(" (OTC)", "") in key:
-            return val
-    return DEFAULT_OTC_PAYOUTS.get(asset, 85)
-
 def analyze_asset(asset):
-    payout = get_payout(asset)
-
     rsi = round(random.uniform(30.0, 75.0), 1)
     stoch_k = round(random.uniform(15.0, 85.0), 1)
     stoch_d = round(stoch_k + random.uniform(-4.0, 4.0), 1)
@@ -154,13 +79,13 @@ def analyze_asset(asset):
     bullish_pts = 0
     bearish_pts = 0
 
-    # Trend (30 pts)
+    # Layer 1: Trend Filter (30 pts)
     if trend == "BULLISH":
         bullish_pts += 30
     else:
         bearish_pts += 30
 
-    # RSI (25 pts)
+    # Layer 2: RSI (25 pts)
     if rsi >= 65:
         bearish_pts += 25
     elif rsi <= 35:
@@ -170,7 +95,7 @@ def analyze_asset(asset):
     else:
         bullish_pts += 15
 
-    # BB (25 pts)
+    # Layer 3: Bollinger Bands (25 pts)
     if bb == "PIERCE":
         if trend == "BEARISH":
             bearish_pts += 25
@@ -180,7 +105,7 @@ def analyze_asset(asset):
         bullish_pts += 10
         bearish_pts += 10
 
-    # Stochastic (20 pts)
+    # Layer 4: Stochastic Crossover (20 pts)
     if stoch_k > 70 and stoch_k < stoch_d:
         bearish_pts += 20
     elif stoch_k < 30 and stoch_k > stoch_d:
@@ -194,7 +119,6 @@ def analyze_asset(asset):
 
     return {
         "asset": asset,
-        "payout": payout,
         "signal": signal,
         "confidence": conf,
         "rsi": rsi,
@@ -206,24 +130,22 @@ def analyze_asset(asset):
     }
 
 # ---------------------------------------------------------
-# 5. AUTO-SCANNER WORKER (EXACT 5s TIMING)
+# 4. AUTO-SCANNER WORKER (EXACT 5s TIMING)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Auto-scan started for chat {chat_id}")
-    pairs = list(DEFAULT_OTC_PAYOUTS.keys())
 
     while ACTIVE_SCANNERS.get(chat_id, False):
         found = None
 
-        # Scan all high-payout pairs
-        for asset in pairs:
+        # Scan monitored pairs for >= 80% confidence
+        for asset in MONITORED_ASSETS:
             if not ACTIVE_SCANNERS.get(chat_id, False):
                 break
 
             result = analyze_asset(asset)
 
-            # Filter: >= 80% confidence and >= 85% payout
-            if result["confidence"] >= 80 and result["payout"] >= 85:
+            if result["confidence"] >= 80:
                 found = result
                 break
             await asyncio.sleep(0.2)
@@ -251,17 +173,21 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 f"🚨 <b>HIGH ACCURACY SIGNAL (5s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
-                f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
                 f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (Confluence Met)\n"
                 f"• <b>Timeframe:</b> M1 (1 Min)\n"
                 f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
                 f"• <b>Candle Countdown:</b> <b>5s remaining (ENTER NOW!)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ <b>SCREEN PAYOUT CHECK:</b>\n"
+                f"Look at the payout percentage on Quotex right now:\n"
+                f"• If <b>&gt;= 85%</b> $\\rightarrow$ <b>EXECUTE TRADE</b>\n"
+                f"• If <b>&lt; 85%</b> $\\rightarrow$ <b>SKIP</b> (Risk edge too low)\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence:</b>\n"
                 f"{found['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>EXECUTE NOW:</b> Click button before countdown reaches 00:00!"
+                f"⚡ <b>EXECUTE:</b> Tap before the timer hits 00:00!"
             )
 
             keyboard = InlineKeyboardMarkup([
@@ -293,19 +219,20 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.sleep(2)
 
 # ---------------------------------------------------------
-# 6. COMMANDS & CALLBACKS
+# 5. COMMANDS & CALLBACKS
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️ Start Auto-Scanner (>=80% & >=85%)", callback_data="start_scan")],
+        [InlineKeyboardButton("▶️ Start Auto-Scanner (>=80% Only)", callback_data="start_scan")],
         [InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan")],
     ])
 
     await update.message.reply_text(
         "🤖 <b>Quotex High-Confluence Signal Scanner</b>\n\n"
-        "• <b>Filter:</b> Minimum <b>80% Confidence</b> & <b>85% Payout</b>\n"
+        "• <b>Confidence Filter:</b> Minimum <b>80% Confluence</b>\n"
         "• <b>Timing:</b> Exactly <b>5s before candle open</b>\n"
-        "• <b>Cycle:</b> Sequential scanning (no simultaneous trades)\n\n"
+        "• <b>Cycle:</b> Sequential scanning (one trade at a time)\n"
+        "• <b>Payout Rule:</b> Check screen for $\\ge 85\\%$ before executing\n\n"
         "Tap below to begin:",
         reply_markup=keyboard,
         parse_mode=ParseMode.HTML
@@ -324,7 +251,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ACTIVE_SCANNERS[chat_id] = True
         await query.message.reply_text(
-            "🔎 <b>Scanner Active!</b> Monitoring high-payout pairs. Your first signal will arrive at <b>:55 seconds</b>.",
+            "🔎 <b>Scanner Active!</b> Monitoring candidate pairs. Signal will arrive at <b>:55 seconds</b>.",
             parse_mode=ParseMode.HTML
         )
         asyncio.create_task(scanner_worker(chat_id, context))
