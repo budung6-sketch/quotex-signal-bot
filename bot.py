@@ -24,7 +24,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quotex All-Assets Scanner Bot active.")
+        self.wfile.write(b"Quotex Auto-Scanner Bot active.")
 
     def log_message(self, format, *args):
         return
@@ -50,7 +50,7 @@ if not BOT_TOKEN:
     logger.error("BOT_TOKEN is missing!")
     sys.exit(1)
 
-# COMPLETE QUOTEX ASSET LIST (All 4 Categories)
+# Complete Quotex Asset Directory
 QUOTEX_MARKETS = {
     "currencies": {
         "title": "💱 CURRENCIES",
@@ -89,7 +89,6 @@ QUOTEX_MARKETS = {
     }
 }
 
-# Master list combining all categories for the auto-scanner
 ALL_ASSETS_LIST = []
 for category in QUOTEX_MARKETS.values():
     ALL_ASSETS_LIST.extend(category["assets"])
@@ -100,7 +99,8 @@ TIMEFRAME_CONFIG = {
     "5": {"label": "M5 (5 Min)", "seconds": 300, "expiry": "Exact 5 Minutes (00:05:00)"},
 }
 
-ACTIVE_SCANNERS = {}  # {chat_id: bool}
+ACTIVE_SCANNERS = {}   # {chat_id: bool}
+TRADE_EVENTS = {}      # {chat_id: asyncio.Event}
 
 # ---------------------------------------------------------
 # 3. INTERACTIVE KEYBOARDS
@@ -166,10 +166,11 @@ def get_signal_keyboard(current_asset, tf_key):
             InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
         ],
         [
-            InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"sel_{current_asset}_{tf_key}"),
+            InlineKeyboardButton("⏭️ Skip (Payout < 85%)", callback_data="skip_signal"),
         ],
         [
-            InlineKeyboardButton("⏱️ Change Timeframe", callback_data=f"tfmenu_{current_asset}"),
+            InlineKeyboardButton("🔄 Re-Analyze", callback_data=f"sel_{current_asset}_{tf_key}"),
+            InlineKeyboardButton("⏱️ Timeframe", callback_data=f"tfmenu_{current_asset}"),
         ],
         [
             InlineKeyboardButton("⬅️ Back to Assets", callback_data="open_main_menu"),
@@ -177,7 +178,7 @@ def get_signal_keyboard(current_asset, tf_key):
     ])
 
 # ---------------------------------------------------------
-# 4. TECHNICAL CONFLUENCE & CONFIDENCE CALCULATION
+# 4. CONFLUENCE & CONFIDENCE CALCULATION
 # ---------------------------------------------------------
 def analyze_asset_confluence(asset, tf_key="1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
@@ -249,22 +250,23 @@ def analyze_asset_confluence(asset, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 5. AUTO-SCANNER WORKER (SCANS ALL ASSETS SEQUENTIALLY)
+# 5. AUTO-SCANNER WORKER (WITH IMMEDIATE SKIP & 10s TIMING)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Auto-scan started for chat {chat_id} across {len(ALL_ASSETS_LIST)} total pairs.")
+    logger.info(f"Auto-scan started for chat {chat_id}.")
+    TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
         found = None
 
-        # Scan every asset in the full list
+        # Scan every asset in Quotex directory
         for asset in ALL_ASSETS_LIST:
             if not ACTIVE_SCANNERS.get(chat_id, False):
                 break
 
             result = analyze_asset_confluence(asset, "1")
 
-            # Check criteria: Confidence >= 80%
+            # Confluence filter: Confidence >= 80%
             if result["confidence"] >= 80:
                 found = result
                 break
@@ -275,9 +277,9 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             continue
 
         if found and ACTIVE_SCANNERS.get(chat_id, False):
-            # Calculate sleep time to send alert exactly at :55 seconds (5s before candle closes)
+            # Target delivery at :50 seconds (10s before candle closes)
             current_sec = int(time.time()) % 60
-            target_sec = 55
+            target_sec = 50
 
             if current_sec < target_sec:
                 wait_time = target_sec - current_sec
@@ -290,30 +292,33 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 break
 
             msg = (
-                f"🚨 <b>HIGH ACCURACY SIGNAL (5s PRE-CANDLE)</b>\n"
+                f"🚨 <b>HIGH ACCURACY SIGNAL (10s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (High Confluence)\n"
+                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b>\n"
                 f"• <b>Timeframe:</b> M1 (1 Min)\n"
                 f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
-                f"• <b>Candle Countdown:</b> <b>5s remaining (ENTER NOW!)</b>\n"
+                f"• <b>Preparation Window:</b> <b>10s remaining (Enter at 00:00)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <b>PAYOUT CHECK RULE:</b>\n"
-                f"Verify the payout percentage on Quotex right now:\n"
-                f"• If <b>&gt;= 85%</b> $\\rightarrow$ <b>EXECUTE TRADE</b>\n"
-                f"• If <b>&lt; 85%</b> $\\rightarrow$ <b>SKIP</b> (Risk edge too low)\n"
+                f"Look at the payout on Quotex right now:\n"
+                f"• If <b>&gt;= 85%</b> $\\rightarrow$ Enter trade at 00:00\n"
+                f"• If <b>&lt; 85%</b> $\\rightarrow$ Tap <b>Skip</b> below to scan next\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence:</b>\n"
                 f"{found['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>EXECUTE:</b> Tap before the timer hits 00:00!"
+                f"⏳ Click at 00:00 if payout &gt;= 85%, or tap Skip."
             )
 
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
                     InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
+                ],
+                [
+                    InlineKeyboardButton("⏭️ Skip (Payout < 85%)", callback_data="skip_signal"),
                 ],
                 [
                     InlineKeyboardButton("⏹️ Stop Auto-Scan", callback_data="stop_scan"),
@@ -327,27 +332,34 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML
             )
 
-            # Wait 65s for full trade expiry
-            await asyncio.sleep(65)
+            # Reset trade event
+            TRADE_EVENTS[chat_id].clear()
 
-            if ACTIVE_SCANNERS.get(chat_id, False):
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="⌛ <b>Trade finished!</b> Scanning all pairs for next &gt;=80% setup...",
-                    parse_mode=ParseMode.HTML
-                )
-                await asyncio.sleep(2)
+            # Wait 70 seconds for trade completion OR break immediately if user taps Skip
+            try:
+                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=70.0)
+                logger.info(f"Signal skipped by user in chat {chat_id}. Resuming scanner immediately.")
+            except asyncio.TimeoutError:
+                logger.info(f"Trade duration elapsed normally for chat {chat_id}.")
+                if ACTIVE_SCANNERS.get(chat_id, False):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="⌛ <b>Trade finished!</b> Scanning all pairs for next &gt;=80% setup...",
+                        parse_mode=ParseMode.HTML
+                    )
+            
+            await asyncio.sleep(2)
 
 # ---------------------------------------------------------
 # 6. COMMANDS & CALLBACK HANDLERS
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 <b>Quotex Signal Engine (All 4 Markets Included)</b>\n\n"
-        "• <b>Auto-Scan:</b> Scans all Currencies, Crypto, Commodities & Stocks\n"
-        "• <b>Filter:</b> Minimum <b>80% Confidence</b>\n"
-        "• <b>Timing:</b> Exactly <b>5s before candle open</b> (`:55`)\n"
-        "• <b>Manual:</b> Or select a category below to pick an exact pair:\n",
+        "🤖 <b>Quotex 10-Second Timing Engine</b>\n\n"
+        "• <b>Timing:</b> Alerts arrive at <b>:50 seconds</b> (10s window before 00:00)\n"
+        "• <b>Filter:</b> Minimum <b>80% Confidence</b> across all pairs\n"
+        "• <b>Payout Rule:</b> Check screen for $\\ge 85\\%$. Tap <b>Skip</b> if lower to find another setup instantly.\n\n"
+        "Tap below to begin:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -374,14 +386,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ACTIVE_SCANNERS[chat_id] = True
             await query.message.reply_text(
                 "🔎 <b>Auto-Scanner Activated!</b>\n"
-                f"Scanning all {len(ALL_ASSETS_LIST)} assets. High-confluence signals arrive at <b>5s before candle open</b>.",
+                f"Scanning all {len(ALL_ASSETS_LIST)} pairs. Signals arrive at <b>:50 seconds</b>.",
                 parse_mode=ParseMode.HTML
             )
             asyncio.create_task(scanner_worker(chat_id, context))
 
         elif data == "stop_scan":
             ACTIVE_SCANNERS[chat_id] = False
+            if chat_id in TRADE_EVENTS:
+                TRADE_EVENTS[chat_id].set()
             await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Tap Start to resume.", parse_mode=ParseMode.HTML)
+
+        elif data == "skip_signal":
+            # Triggers immediate scan bypass without waiting 70 seconds
+            if chat_id in TRADE_EVENTS:
+                TRADE_EVENTS[chat_id].set()
+            await query.message.reply_text("⏭️ <b>Signal skipped (Payout &lt; 85%).</b> Searching next pair immediately...", parse_mode=ParseMode.HTML)
+
+        elif data == "log_win":
+            await query.message.reply_text("✅ Result logged: <b>WIN</b>. Flat stake discipline maintained.", parse_mode=ParseMode.HTML)
+
+        elif data == "log_loss":
+            await query.message.reply_text("❌ Result logged: <b>LOSS</b>. Next signal will be scanned.", parse_mode=ParseMode.HTML)
 
         elif data.startswith("cat_"):
             parts = data.split("_")
@@ -420,19 +446,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 <b>Technical Confluence:</b>\n"
                 f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"⚠️ <b>Rule:</b> Verify payout &gt;= 85% on Quotex. Enter at 00:55–00:58."
+                f"⚠️ <b>Rule:</b> Verify payout &gt;= 85% on Quotex. Enter at 00:00 open."
             )
             await query.edit_message_text(
                 signal_text,
                 reply_markup=get_signal_keyboard(asset, tf_key),
                 parse_mode=ParseMode.HTML,
             )
-
-        elif data == "log_win":
-            await query.message.reply_text("✅ Result logged: <b>WIN</b>. Flat risk discipline maintained.", parse_mode=ParseMode.HTML)
-
-        elif data == "log_loss":
-            await query.message.reply_text("❌ Result logged: <b>LOSS</b>. Next signal will be scanned.", parse_mode=ParseMode.HTML)
 
     except TelegramError as e:
         logger.warning(f"Callback error {data}: {e}")
