@@ -44,7 +44,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
 
-        # --- ENDPOINT 1: REAL-TIME TICK BUILDER ---
+        # --- ENDPOINT 1: REAL-TIME TICK BUILDER WITH ASSET ISOLATION ---
         if self.path == "/live_tick":
             try:
                 data = json.loads(body)
@@ -55,6 +55,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
                 if price > 0:
                     with DATA_LOCK:
+                        # Auto-Reset if switching between different price scale pairs (e.g. 105.x down to 0.18x)
+                        if "ACTIVE_CHART" in REAL_CANDLE_HISTORY and REAL_CANDLE_HISTORY["ACTIVE_CHART"]:
+                            last_p = REAL_CANDLE_HISTORY["ACTIVE_CHART"][-1]["close"]
+                            # If price jumps drastically (> 30%), clear contaminated cache immediately
+                            if abs(price - last_p) / max(last_p, 0.0001) > 0.30:
+                                REAL_CANDLE_HISTORY["ACTIVE_CHART"] = []
+                                if asset in REAL_CANDLE_HISTORY:
+                                    REAL_CANDLE_HISTORY[asset] = []
+
                         for key in [asset, "ACTIVE_CHART"]:
                             if key not in REAL_CANDLE_HISTORY:
                                 REAL_CANDLE_HISTORY[key] = []
@@ -105,7 +114,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-        # --- ENDPOINT 3: WEBSOCKET HISTORY BULK SYNC ---
+        # --- ENDPOINT 3: WEBSOCKET BULK HISTORY SYNC ---
         elif self.path == "/update_candles":
             try:
                 data = json.loads(body)
@@ -185,7 +194,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN is missing! Export BOT_TOKEN='your_token'")
+    logger.error("BOT_TOKEN is missing! Set BOT_TOKEN in your environment variables.")
     sys.exit(1)
 
 # ---------------------------------------------------------
@@ -421,7 +430,7 @@ def calculate_timeframe_bias(bars):
         return "BEARISH", ema9, ema21
 
 # ---------------------------------------------------------
-# 6. CONFLUENCE SCORING ENGINE WITH WARM-UP & RUN-GUARD
+# 6. CONFLUENCE SCORING ENGINE WITH WARM-UP & MOMENTUM GUARD
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     with DATA_LOCK:
@@ -435,15 +444,18 @@ def get_verified_payout(asset):
 
 def build_warmed_candles(current_price, live_bars):
     """
-    Synthesizes realistic prior candles anchored to current_price 
-    so indicators (RSI, Bollinger Bands) never collapse during early startup.
+    Synthesizes clean prior candles anchored proportionally to current_price 
+    so indicators (RSI, Bollinger Bands, ATR) never explode or distort.
     """
     warm_up_count = max(0, 35 - len(live_bars))
     synthetic_bars = []
     price_tracker = current_price
     
+    # Scale proportional steps according to price level (Forex vs Crypto vs Currencies)
+    step_scale = (current_price / 1000.0) if current_price > 5.0 else 0.00012
+
     for _ in range(warm_up_count):
-        step = random.uniform(-0.0008, 0.0008) * (current_price / 100.0)
+        step = random.uniform(-1, 1) * step_scale
         c_open = price_tracker
         c_close = c_open + step
         c_high = max(c_open, c_close) + abs(step) * 0.4
@@ -477,7 +489,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     current_price = close_prices[-1]
     current_candle = candles[-1]
 
-    # Doji Shield: Skip flat, indecisive candles
+    # Doji Shield: Filter out indecision bars
     if is_doji_candle(current_candle):
         return {
             "asset": asset, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
@@ -565,7 +577,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     best_call = max(rev_call, trend_call)
     best_put = max(rev_put, trend_put)
 
-    # MOMENTUM RUN GUARD: Prevent counter-trend knife-catching against 3 consecutive candles
+    # MOMENTUM RUN GUARD: Prevent counter-trend trades against 3 consecutive candles
     if len(candles) >= 3:
         three_red = all(c["close"] < c["open"] for c in candles[-3:])
         three_green = all(c["close"] > c["open"] for c in candles[-3:])
@@ -660,7 +672,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 await asyncio.sleep(1.0)
                 continue
 
-            # Deliver exactly 10s before candle close
+            # Deliver signal exactly 10s before candle open
             current_sec = int(time.time()) % total_seconds
             target_dispatch_sec = total_seconds - 10
 
@@ -828,8 +840,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Multi-Timeframe Stack:</b>\n"
         f"  1. M15 Macro Trend Concurrence\n"
         f"  2. M5 Swing Alignment\n"
-        f"  3. Momentum Run Guard (Anti-Knife Catching)\n"
-        f"  4. Dynamic S/R Zones & Round Levels\n"
+        f"  3. Momentum Run Guard (Anti-breakout)\n"
+        f"  4. Dynamic S/R Zones & Automatic Asset Isolator\n"
         f"• <b>Dispatch:</b> Exact <b>10 seconds before candle open</b>\n"
         f"• <b>Execution:</b> 1-by-1 Sequential (Payout &ge; 85%, Conf &ge; 80%)\n\n"
         "Select your timeframe scan mode below:",
@@ -867,7 +879,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🔎 <b>1-by-1 {tf_label} Auto-Scanner Started!</b>\n\n"
                 f"• Evaluating <b>M15 Macro + M5 HTF Concurrence</b>.\n"
-                f"• Momentum Run Guard Active (Anti-breakout).\n"
+                f"• Momentum Run Guard Active.\n"
                 f"• Filters: Payout &ge; 85% & Confidence &ge; 80%.\n"
                 f"• Signals arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
@@ -883,7 +895,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ACTIVE_SCANNERS[chat_id] = True
             await query.message.reply_text(
                 f"🎯 <b>1-by-1 Scanner Locked on: {pinned_asset} ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
-                f"• Checking M15 Macro & M5 HTF.\n"
+                f"• Confluence checked against M15 Macro & M5 HTF.\n"
                 f"• Signals deliver <b>10s before candle open</b>.\n\n"
                 f"Tap <b>Stop Scanner</b> anytime to unlock.",
                 parse_mode=ParseMode.HTML
@@ -958,7 +970,7 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting Live Tick Engine (10s pre-candle loop)...")
+    logger.info("Bot starting Live Tick Engine (Asset Isolator + 10s pre-candle loop)...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
