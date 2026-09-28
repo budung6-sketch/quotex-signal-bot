@@ -85,7 +85,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                                 })
                         if parsed_bars:
                             with DATA_LOCK:
-                                REAL_CANDLE_HISTORY[asset] = parsed_bars[-100:]
+                                REAL_CANDLE_HISTORY[asset] = parsed_bars[-120:]
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -231,7 +231,7 @@ def get_current_scan_pool():
     return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_ASSETS
 
 # ---------------------------------------------------------
-# 5. MATHEMATICAL & TECHNICAL INDICATORS
+# 5. MATHEMATICAL & MULTI-TIMEFRAME INDICATORS
 # ---------------------------------------------------------
 def calculate_ema(prices, period):
     if len(prices) < period:
@@ -319,38 +319,54 @@ def detect_rejection_wicks(candle):
     lower_rejection = lower_wick >= (1.6 * body)
     return upper_rejection, lower_rejection
 
-def calculate_higher_timeframe_bias(m1_candles):
-    if len(m1_candles) < 25:
-        return "NEUTRAL", 0, 0
+def is_doji_candle(candle):
+    total_range = candle["high"] - candle["low"]
+    if total_range <= 0.00001:
+        return True
+    body = abs(candle["close"] - candle["open"])
+    return (body / total_range) < 0.12
 
-    m5_bars = []
-    chunk_size = 5
+def is_near_round_number(price, step=0.0050):
+    remainder = abs(price % step)
+    pip_threshold = step * 0.08
+    return remainder <= pip_threshold or remainder >= (step - pip_threshold)
+
+# --- DUAL HIGHER TIMEFRAME AGGREGATOR (M5 & M15) ---
+def aggregate_candles(m1_candles, timeframe_minutes):
+    """Compresses 1-minute bars into higher timeframe bars (M5 or M15)."""
+    chunk_size = timeframe_minutes
+    if len(m1_candles) < chunk_size * 4:
+        return []
+
+    htf_bars = []
     for i in range(0, len(m1_candles) - (len(m1_candles) % chunk_size), chunk_size):
         chunk = m1_candles[i:i + chunk_size]
         if chunk:
-            m5_bars.append({
+            htf_bars.append({
                 "open": chunk[0]["open"],
                 "high": max(c["high"] for c in chunk),
                 "low": min(c["low"] for c in chunk),
                 "close": chunk[-1]["close"],
             })
+    return htf_bars
 
-    if len(m5_bars) < 5:
-        return "NEUTRAL", 0, 0
+def calculate_timeframe_bias(bars):
+    """Calculates EMA 9/21 trend direction on aggregated bars."""
+    if len(bars) < 5:
+        return "NEUTRAL", 0.0, 0.0
+    closes = [b["close"] for b in bars]
+    current_price = closes[-1]
+    ema9 = calculate_ema(closes, 5)
+    ema21 = calculate_ema(closes, 12)
 
-    m5_closes = [b["close"] for b in m5_bars]
-    current_m5_price = m5_closes[-1]
-    m5_ema9 = calculate_ema(m5_closes, 5)
-    m5_ema21 = calculate_ema(m5_closes, 12)
-
-    if current_m5_price > m5_ema9 and m5_ema9 >= m5_ema21:
-        return "BULLISH", m5_ema9, m5_ema21
-    elif current_m5_price < m5_ema9 and m5_ema9 <= m5_ema21:
-        return "BEARISH", m5_ema9, m5_ema21
-    return "NEUTRAL", m5_ema9, m5_ema21
+    if current_price > ema9 and ema9 >= ema21:
+        return "BULLISH", ema9, ema21
+    elif current_price < ema9 and ema9 <= ema21:
+        return "BEARISH", ema9, ema21
+    return "NEUTRAL", ema9, ema21
 
 # ---------------------------------------------------------
-# 6. CONFLUENCE SCORING ENGINE
+# 6. PRICE ACTION & M5/M15 CONFLUENCE SCORING ENGINE
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     with DATA_LOCK:
@@ -366,7 +382,7 @@ def generate_dynamic_candles():
     base_price = 104.5 + random.uniform(-0.5, 0.5)
     candles = []
     direction = random.choice([-1, 1])
-    for i in range(50):
+    for i in range(65):
         change = (0.05 * direction) + random.uniform(-0.02, 0.02)
         c_open = base_price
         c_close = c_open + change
@@ -386,13 +402,22 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         candles_raw = REAL_CANDLE_HISTORY.get(asset) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
         candles = list(candles_raw) if candles_raw else None
 
-    if not candles or len(candles) < 30:
+    if not candles or len(candles) < 40:
         candles = generate_dynamic_candles()
 
     close_prices = [c["close"] for c in candles]
     current_price = close_prices[-1]
     current_candle = candles[-1]
 
+    # Doji Guard: Reject flat indecisive market
+    if is_doji_candle(current_candle):
+        return {
+            "asset": asset, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
+            "confidence": 40, "notes": "• <b>Market Status:</b> Indecision Doji detected. Trade skipped.",
+            "tf_data": tf_data, "remaining_sec": remaining_sec
+        }
+
+    # Technical Indicators
     ema9 = calculate_ema(close_prices, 9)
     ema21 = calculate_ema(close_prices, 21)
     rsi = calculate_rsi(close_prices, 14)
@@ -402,7 +427,13 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
 
     resistance, support = detect_support_resistance(candles, 20)
     upper_rej, lower_rej = detect_rejection_wicks(current_candle)
-    htf_bias, m5_ema9, m5_ema21 = calculate_higher_timeframe_bias(candles)
+    near_round = is_near_round_number(current_price)
+
+    # Higher Timeframe Aggregations
+    m5_bars = aggregate_candles(candles, 5)
+    m15_bars = aggregate_candles(candles, 15)
+    m5_bias, _, _ = calculate_timeframe_bias(m5_bars)
+    m15_bias, _, _ = calculate_timeframe_bias(m15_bars)
 
     # Reversal Scoring
     rev_put = 0
@@ -418,6 +449,10 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     if lower_rej:
         rev_call += 25
 
+    if near_round:
+        rev_put += 12
+        rev_call += 12
+
     if current_price >= (upper_bb * 0.9995) or rsi >= 68:
         rev_put += 20
     if current_price <= (lower_bb * 1.0005) or rsi <= 32:
@@ -428,7 +463,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     if stoch_k <= 22:
         rev_call += 15
 
-    # Trend Scoring
+    # Trend Momentum Scoring
     trend_call = 0
     trend_put = 0
 
@@ -446,15 +481,26 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         if not lower_rej:
             trend_put += 15
 
-    # HTF Concurrence Bonus
-    if htf_bias == "BULLISH":
-        trend_call += 20
-        rev_call += 15
+    # Dual Higher Timeframe Concurrence (M5 + M15)
+    # M5 Alignment
+    if m5_bias == "BULLISH":
+        trend_call += 15
+        rev_call += 10
         trend_put -= 15
-    elif htf_bias == "BEARISH":
-        trend_put += 20
-        rev_put += 15
+    elif m5_bias == "BEARISH":
+        trend_put += 15
+        rev_put += 10
         trend_call -= 15
+
+    # M15 Macro Alignment (Key for 5-minute analysis)
+    if m15_bias == "BULLISH":
+        trend_call += 15
+        rev_call += 10
+        trend_put -= 20
+    elif m15_bias == "BEARISH":
+        trend_put += 15
+        rev_put += 10
+        trend_call -= 20
 
     best_call = max(rev_call, trend_call)
     best_put = max(rev_put, trend_put)
@@ -468,14 +514,17 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
 
     is_live = "(OTC)" not in asset
     market_tag = "🌐 Live Real Market" if is_live else "💱 OTC Market"
-    htf_icon = "🟢 Strong Uptrend" if htf_bias == "BULLISH" else "🔴 Strong Downtrend" if htf_bias == "BEARISH" else "⚪ Range / Neutral"
+    m5_icon = "🟢 Bullish" if m5_bias == "BULLISH" else "🔴 Bearish" if m5_bias == "BEARISH" else "⚪ Neutral"
+    m15_icon = "🟢 Strong Uptrend" if m15_bias == "BULLISH" else "🔴 Strong Downtrend" if m15_bias == "BEARISH" else "⚪ Neutral"
 
     notes = (
         f"• <b>Market Type:</b> {market_tag}\n"
         f"• <b>Current Price:</b> {current_price:.5f}\n"
-        f"• <b>Higher TF (M5):</b> <b>{htf_icon}</b>\n"
+        f"• <b>Macro Trend (M15):</b> <b>{m15_icon}</b>\n"
+        f"• <b>Higher TF (M5):</b> <b>{m5_icon}</b>\n"
         f"• <b>Key Levels:</b> Res: {resistance:.5f} | Supp: {support:.5f}\n"
         f"• <b>Price Action:</b> {'🔻 Upper Rejection Wick' if upper_rej else '🟢 Lower Rejection Wick' if lower_rej else 'Solid Impulse'}\n"
+        f"• <b>Round Number:</b> {'⚡ Institutional Level Reached' if near_round else 'Mid-zone'}\n"
         f"• <b>M1 EMA (9/21):</b> {'Bullish' if ema9 > ema21 else 'Bearish'} ({ema9:.4f})\n"
         f"• <b>RSI (14):</b> {rsi} ({'Overbought' if rsi >= 68 else 'Oversold' if rsi <= 32 else 'Momentum'})\n"
         f"• <b>Bollinger Bands:</b> {upper_bb:.4f} / {lower_bb:.4f}\n"
@@ -493,19 +542,20 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 7. SEQUENTIAL WORKER (EXACT 10 SECONDS PRE-CANDLE DISPATCH)
+# 7. SEQUENTIAL WORKER (10s PRE-CANDLE DISPATCH)
 # ---------------------------------------------------------
-async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None):
+async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
+    tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
+    total_seconds = tf_data["seconds"]
     scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Available Pairs"
-    logger.info(f"1-by-1 Scanner active (Target: :50s / 10s pre-candle) for {chat_id} | Mode: {scan_desc}")
+    logger.info(f"1-by-1 Scanner active (Target: :50s / 10s pre-candle | TF: {tf_data['label']}) for {chat_id}")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
         try:
-            current_minute_tag = int(time.time() / 60)
+            current_cycle_tag = int(time.time() / total_seconds)
 
-            # Prevent double dispatch in the same candle
-            if LAST_SENT_CANDLE.get(chat_id) == current_minute_tag:
+            if LAST_SENT_CANDLE.get(chat_id) == current_cycle_tag:
                 await asyncio.sleep(2)
                 continue
 
@@ -518,10 +568,9 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
                 current_payout = get_verified_payout(asset)
 
-                # Strict Rules: Payout >= 85 and Confidence >= 80
                 if current_payout >= 85:
-                    res = analyze_real_chart(asset, current_payout, "1")
-                    if res["confidence"] >= 80:
+                    res = analyze_real_chart(asset, current_payout, tf_key)
+                    if res["confidence"] >= 80 and not res["signal"].startswith("HOLD"):
                         found = res
                         break
                 await asyncio.sleep(0.01)
@@ -530,23 +579,22 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 await asyncio.sleep(1.0)
                 continue
 
-            # DELIVER EXACTLY AT :50 SECONDS (10s PRE-CANDLE)
-            now_sec = int(time.time()) % 60
-            target_dispatch_sec = 50
+            # Deliver exactly 10s before candle close
+            current_sec = int(time.time()) % total_seconds
+            target_dispatch_sec = total_seconds - 10
 
-            if now_sec < target_dispatch_sec:
-                wait_time = target_dispatch_sec - now_sec
-                logger.info(f"Signal confirmed for {found['asset']}. Holding {wait_time}s to deliver exactly at :50s mark (10s before candle).")
+            if current_sec < target_dispatch_sec:
+                wait_time = target_dispatch_sec - current_sec
+                logger.info(f"Signal confirmed for {found['asset']}. Delivering in {wait_time}s (10s before open).")
                 await asyncio.sleep(wait_time)
-            elif now_sec > 55:
-                # If discovered past :55s, candle is already starting, skip to prepare next
-                await asyncio.sleep(60 - now_sec)
+            elif current_sec > (total_seconds - 5):
+                await asyncio.sleep(total_seconds - current_sec)
                 continue
 
             if not ACTIVE_SCANNERS.get(chat_id, False):
                 break
 
-            LAST_SENT_CANDLE[chat_id] = current_minute_tag
+            LAST_SENT_CANDLE[chat_id] = current_cycle_tag
 
             lock_tag = f"🎯 <b>PINNED: {single_asset}</b>\n" if single_asset else ""
             msg = (
@@ -556,15 +604,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 f"• <b>Payout:</b> <b>{found['payout']}%</b> (&gt;= 85% Verified)\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
                 f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (&gt;= 80% Validated)\n"
-                f"• <b>Timeframe:</b> M1 (1 Min)\n"
-                f"• <b>Option Expiry:</b> 00:01:00 (TIMER Mode)\n"
+                f"• <b>Chart Timeframe:</b> {found['tf_data']['label']}\n"
+                f"• <b>Option Expiry:</b> {found['tf_data']['expiry']}\n"
                 f"• <b>Preparation Window:</b> <b>10 SECONDS LEFT &rarr; ENTER AT 00:00</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Confluence (HTF M5 + Price Action):</b>\n"
+                f"📊 <b>Confluence (M15 Macro + M5 HTF + Price Action):</b>\n"
                 f"{found['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>ENTER AT EXACT 00:00 CANDLE OPEN</b>\n"
-                f"<i>(Scanner paused until this 1-minute trade completes)</i>"
+                f"⚡ <b>ENTER AT EXACT CANDLE OPEN (00:00)</b>\n"
+                f"<i>(Scanner paused until this trade completes)</i>"
             )
 
             keyboard = InlineKeyboardMarkup([
@@ -584,21 +632,22 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
-            logger.info(f"Signal sent at :50s mark to chat {chat_id}. Pausing for trade completion.")
+            logger.info(f"Signal dispatched at 10s pre-candle to chat {chat_id}.")
 
             TRADE_EVENTS[chat_id].clear()
 
-            # EXACT 1-BY-1 LOCK: Wait 70 seconds for the trade candle to finish
+            # Sequential lock: Wait full duration of candle + 10s buffer
+            lock_duration = float(total_seconds + 10)
             try:
-                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=70.0)
+                await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=lock_duration)
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
                     status_text = (
-                        f"🏁 <b>1-Minute Trade Complete!</b>\n"
-                        f"Analyzing next setup on <b>{single_asset}</b> (10s pre-candle)..."
+                        f"🏁 <b>{found['tf_data']['label']} Trade Finished!</b>\n"
+                        f"Analyzing next setup on <b>{single_asset}</b>..."
                         if single_asset else
-                        "🏁 <b>1-Minute Trade Complete!</b>\n"
-                        "Scanning open pairs for next setup (10s pre-candle)..."
+                        f"🏁 <b>{found['tf_data']['label']} Trade Finished!</b>\n"
+                        "Scanning all pairs for next setup with M15/M5 confluence..."
                     )
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -620,7 +669,8 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Start 1-by-1 Auto-Scan (10s Pre-Candle)", callback_data="start_scan"),
+            InlineKeyboardButton("▶️ Auto-Scan M1 (10s Pre-Candle)", callback_data="start_scan_1"),
+            InlineKeyboardButton("▶️ Auto-Scan M5 (M15 HTF Engine)", callback_data="start_scan_5"),
         ],
         [
             InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan"),
@@ -665,14 +715,16 @@ def get_asset_list_keyboard(cat_key, page=0, page_size=6):
 def get_signal_keyboard(current_asset, tf_key):
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (10s Pre-Candle)", callback_data=f"lock_{current_asset}"),
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M1)", callback_data=f"lock_{current_asset}_1"),
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M5)", callback_data=f"lock_{current_asset}_5"),
         ],
         [
             InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
             InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
         ],
         [
-            InlineKeyboardButton("🔄 Re-Analyze Now", callback_data=f"sel_{current_asset}_{tf_key}"),
+            InlineKeyboardButton("🔄 Re-Analyze M1", callback_data=f"sel_{current_asset}_1"),
+            InlineKeyboardButton("🔄 Re-Analyze M5", callback_data=f"sel_{current_asset}_5"),
         ],
         [
             InlineKeyboardButton("⬅️ Back to Menu", callback_data="open_main_menu"),
@@ -688,17 +740,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex 10-Second Precision Engine</b>\n\n"
+        f"🤖 <b>Quotex M15 Macro + M5 HTF Engine</b>\n\n"
         f"• <b>Market Session:</b> {status_text}\n"
-        f"• <b>Dispatch Timing:</b> <b>Exact :50 seconds (10s before candle open)</b>\n"
-        f"• <b>Execution Mode:</b> 1-by-1 Sequential (Pauses during trade)\n"
-        f"• <b>Intelligence:</b>\n"
-        f"  - M5 Higher Timeframe Trend Concurrence\n"
-        f"  - Dynamic S/R Swing Levels\n"
-        f"  - Candlestick Rejection Wicks\n"
-        f"  - ATR Volatility Engine\n"
-        f"• <b>Filters:</b> Payout &ge; 85% | Confidence &ge; 80%\n\n"
-        "Tap below to begin:",
+        f"• <b>Higher Timeframe Stack:</b>\n"
+        f"  - <b>M15 Macro Trend Filter</b> (Trend Confirmation)\n"
+        f"  - <b>M5 Swing Alignment</b>\n"
+        f"  - Support & Resistance Dynamic Zones\n"
+        f"  - Candlestick Rejection Wicks & Doji Shield\n"
+        f"• <b>Timing:</b> Exact <b>10 seconds before candle open</b>\n"
+        f"• <b>Execution:</b> 1-by-1 Sequential (Payout &ge; 85%, Conf &ge; 80%)\n\n"
+        "Select your timeframe scan mode below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -724,33 +775,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
             )
 
-        elif data == "start_scan":
+        elif data.startswith("start_scan"):
+            tf_choice = "5" if data == "start_scan_5" else "1"
             stop_active_task(chat_id)
             ACTIVE_SCANNERS[chat_id] = True
 
+            tf_label = "M5 (5 Minutes)" if tf_choice == "5" else "M1 (1 Minute)"
             await query.message.reply_text(
-                "🔎 <b>1-by-1 Auto-Scanner Started!</b>\n\n"
-                "• Payout &ge; 85% & Confidence &ge; 80%\n"
-                "• Checking M5 Higher TF + Price Action.\n"
-                "• Signals arrive at <b>:50 seconds (10s before candle)</b>.",
+                f"🔎 <b>1-by-1 {tf_label} Auto-Scanner Started!</b>\n\n"
+                f"• Evaluating <b>M15 Macro Trend + M5 Concurrence</b>.\n"
+                f"• Filters: Payout &ge; 85% & Confidence &ge; 80%.\n"
+                f"• Signals arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
-            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=None))
+            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=None, tf_key=tf_choice))
 
         elif data.startswith("lock_"):
-            pinned_asset = data.replace("lock_", "")
-            stop_active_task(chat_id)
+            parts = data.replace("lock_", "").rsplit("_", 1)
+            pinned_asset = parts[0]
+            tf_choice = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
 
+            stop_active_task(chat_id)
             ACTIVE_SCANNERS[chat_id] = True
             await query.message.reply_text(
-                f"🎯 <b>1-by-1 Scanner Locked on: {pinned_asset}</b>\n\n"
-                f"• Watching M5 trend alignment + candle wicks.\n"
-                f"• Signal dispatches at <b>:50 seconds (10s before candle)</b>.\n"
-                f"• Waits for trade to finish before next scan.\n\n"
+                f"🎯 <b>1-by-1 Scanner Locked on: {pinned_asset} ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
+                f"• Confluence checked against M15 Macro & M5 HTF.\n"
+                f"• Signals deliver <b>10s before candle open</b>.\n\n"
                 f"Tap <b>Stop Scanner</b> anytime to unlock.",
                 parse_mode=ParseMode.HTML
             )
-            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=pinned_asset))
+            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=pinned_asset, tf_key=tf_choice))
 
         elif data == "stop_scan":
             stop_active_task(chat_id)
@@ -799,10 +853,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• <b>Option Expiry:</b> {res['tf_data']['expiry']}\n"
                 f"• <b>Candle Countdown:</b> {res['remaining_sec']}s remaining\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Technical & HTF Confluence:</b>\n"
+                f"📊 <b>Technical & M15/M5 HTF Confluence:</b>\n"
                 f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 <i>Tip: Tap button below to continuously scan this pair!</i>"
+                f"💡 <i>Tip: Select continuous auto-scan mode below:</i>"
             )
             await query.edit_message_text(
                 signal_text,
@@ -820,7 +874,7 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting 10s pre-candle 1-by-1 polling loop...")
+    logger.info("Bot starting M15/M5 HTF 10s pre-candle polling loop...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
