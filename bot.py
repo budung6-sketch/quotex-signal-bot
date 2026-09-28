@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 # ---------------------------------------------------------
-# 1. LIVE TICK BRIDGE & INGESTION
+# 1. LIVE SCREEN INGESTION & DATA LOCK
 # ---------------------------------------------------------
 LIVE_BROWSER_PAYOUTS = {}
 REAL_CANDLE_HISTORY = {}
@@ -29,10 +29,10 @@ CURRENT_STREAMED_ASSET = "EUR/USD"
 LATEST_SCREEN_PRICE = 0.0
 DATA_LOCK = threading.Lock()
 
-# Anti-MTG State Management
+# Anti-MTG compounding manager per chat
 USER_STAKE_CONFIG = {}  # {chat_id: {"base": 100, "current": 100, "step": 1, "max_steps": 3, "streak": 0}}
 
-# Master directory of all Quotex assets (Both Live & OTC)
+# Master directory of all Quotex assets
 LIVE_FOREX_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
     "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
@@ -83,27 +83,6 @@ QUOTEX_MARKETS = {
     "stocks": {"title": "📈 STOCKS (19)", "assets": STOCKS_ASSETS},
 }
 
-ALL_SCAN_ASSETS = LIVE_FOREX_ASSETS + OTC_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
-
-ASSET_PRICE_BASELINES = {
-    "EUR/USD": 1.0850, "GBP/USD": 1.2950, "USD/JPY": 154.20, "USD/CHF": 0.8840,
-    "USD/CAD": 1.3920, "AUD/USD": 0.6550, "NZD/USD": 0.5920, "EUR/GBP": 0.8520,
-    "Gold": 2680.50, "Silver": 31.80, "Bitcoin": 64500.0,
-    "USD/ARS (OTC)": 1592.50, "USD/COP (OTC)": 3212.80, "USD/INR (OTC)": 105.15,
-    "USD/PKR (OTC)": 288.45, "USD/BDT (OTC)": 128.20, "USD/BRL (OTC)": 5.4850,
-    "USD/IDR (OTC)": 16250.0, "USD/EGP (OTC)": 48.60, "USD/TRY (OTC)": 34.20,
-    "EUR/USD (OTC)": 1.0850, "GBP/USD (OTC)": 1.2950, "USD/JPY (OTC)": 154.20,
-    "Gold (OTC)": 2680.50, "Silver (OTC)": 31.80, "Bitcoin (OTC)": 64500.0
-}
-
-DEFAULT_PAYOUTS = {
-    "EUR/USD": 89, "GBP/USD": 88, "USD/JPY": 88, "Gold": 88,
-    "USD/ARS (OTC)": 93, "USD/COP (OTC)": 91, "EUR/USD (OTC)": 90,
-    "GBP/USD (OTC)": 89, "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88,
-    "USD/BDT (OTC)": 88, "USD/EGP (OTC)": 88, "Gold (OTC)": 88,
-    "Bitcoin (OTC)": 88, "USD/INR (OTC)": 77
-}
-
 class BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -116,7 +95,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             cur_p = LATEST_SCREEN_PRICE
             cur_a = CURRENT_STREAMED_ASSET
         self.wfile.write(
-            f"Quotex Engine Active | Stream: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Assets: {c_count}".encode("utf-8")
+            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Synced Assets: {c_count}".encode("utf-8")
         )
 
     def do_POST(self):
@@ -226,7 +205,7 @@ def run_http_server():
 threading.Thread(target=run_http_server, daemon=True).start()
 
 # ---------------------------------------------------------
-# 2. LOGGING & INITIALIZATION
+# 2. LOGGING & APPLICATION RUNTIME
 # ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -250,7 +229,7 @@ SCANNER_TASKS = {}
 LAST_SENT_CANDLE = {}
 
 # ---------------------------------------------------------
-# 3. MATHEMATICAL & TECHNICAL INDICATORS
+# 3. ANTI-MARTINGALE & TECHNICAL ANALYSIS
 # ---------------------------------------------------------
 def get_user_anti_mtg(chat_id):
     if chat_id not in USER_STAKE_CONFIG:
@@ -446,74 +425,46 @@ def evaluate_momentum(closes):
     return call_pts, put_pts, rsi, macd_hist
 
 # ---------------------------------------------------------
-# 4. MULTI-MARKET SCORING ENGINE (PAYOUT >= 88% & CONFIDENCE >= 80)
+# 4. STRICT LIVE SCREEN-SYNC SCORING ENGINE
 # ---------------------------------------------------------
-def get_verified_payout(asset):
-    clean = asset.replace(" (OTC)", "").strip()
-    with DATA_LOCK:
-        if asset in LIVE_BROWSER_PAYOUTS:
-            return LIVE_BROWSER_PAYOUTS[asset], True
-        if clean in LIVE_BROWSER_PAYOUTS:
-            return LIVE_BROWSER_PAYOUTS[clean], True
-        if asset == CURRENT_STREAMED_ASSET and "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
-            return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"], True
-
-    if asset in DEFAULT_PAYOUTS:
-        return DEFAULT_PAYOUTS[asset], False
-    if clean in DEFAULT_PAYOUTS:
-        return DEFAULT_PAYOUTS[clean], False
-
-    return 88, False
-
-def build_asset_candles(asset):
-    clean = asset.replace(" (OTC)", "").strip()
-    base_p = ASSET_PRICE_BASELINES.get(asset) or ASSET_PRICE_BASELINES.get(clean, 100.0)
-    bars = []
-    p = base_p
-    step = p * 0.0001
-    for _ in range(35):
-        d = random.uniform(-1, 1) * step
-        o = p
-        c = o + d
-        bars.insert(0, {"open": o, "high": max(o, c) + abs(d)*0.3, "low": min(o, c) - abs(d)*0.3, "close": c})
-        p = c
-    return bars
-
 def run_scoring_architecture(asset, tf_key="1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
     total_sec = tf_data["seconds"]
     rem_sec = total_sec - (int(time.time()) % total_sec)
 
-    payout, is_live_p = get_verified_payout(asset)
+    clean_asset = asset.replace(" (OTC)", "").strip()
 
-    # 1. STRICT PAYOUT >= 88% RULE
+    with DATA_LOCK:
+        payout = (
+            LIVE_BROWSER_PAYOUTS.get(asset) or
+            LIVE_BROWSER_PAYOUTS.get(clean_asset) or
+            LIVE_BROWSER_PAYOUTS.get(CURRENT_STREAMED_ASSET, 0)
+        )
+        curr_p = LATEST_SCREEN_PRICE
+        candles_raw = (
+            REAL_CANDLE_HISTORY.get(CURRENT_STREAMED_ASSET) or
+            REAL_CANDLE_HISTORY.get(asset) or []
+        )
+        candles = list(candles_raw)
+
+    # STRICT 88%+ PAYOUT FILTER
     if payout < 88:
         return {
-            "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
-            "confidence": 0, "notes": f"Payout ({payout}%) below 88% filter.",
-            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": 0.0
+            "asset": CURRENT_STREAMED_ASSET, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
+            "confidence": 0, "notes": f"Screen payout ({payout}%) below 88% requirement.",
+            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p
         }
 
-    # 2. RESOLVE REAL SCREEN VS BACKGROUND CANDLES
-    clean_target = asset.replace(" (OTC)", "").strip()
-    with DATA_LOCK:
-        is_active_phone_chart = (
-            asset == CURRENT_STREAMED_ASSET or 
-            clean_target == CURRENT_STREAMED_ASSET.replace(" (OTC)", "").strip()
-        )
-        if is_active_phone_chart:
-            candles_raw = REAL_CANDLE_HISTORY.get(CURRENT_STREAMED_ASSET) or REAL_CANDLE_HISTORY.get(asset)
-            candles = list(candles_raw) if candles_raw else []
-            curr_p = LATEST_SCREEN_PRICE if LATEST_SCREEN_PRICE > 0 else (candles[-1]["close"] if candles else build_asset_candles(asset)[-1]["close"])
-        else:
-            candles = build_asset_candles(asset)
-            curr_p = candles[-1]["close"]
-
-    if len(candles) < 30:
-        base_fill = build_asset_candles(asset)
-        candles = base_fill + candles
+    # STRICT REAL TICK RECEPTION GUARD
+    if curr_p <= 0 or len(candles) < 2:
+        return {
+            "asset": CURRENT_STREAMED_ASSET, "payout": payout, "signal": "HOLD (AWAITING TICKS)",
+            "confidence": 0, "notes": "Awaiting active Lemur Browser WebSocket ticks.",
+            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p
+        }
 
     closes = [c["close"] for c in candles]
+    closes[-1] = curr_p  # Sync current candle close strictly to the screen tick
 
     pa_call, pa_put, pa_status = evaluate_price_action(candles)
     tr_call, tr_put, trend_label = evaluate_trend_regime(closes)
@@ -523,7 +474,7 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     if pa_status == "Flatline Doji":
         return {
-            "asset": asset, "payout": payout, "signal": "HOLD (DOJI)",
+            "asset": CURRENT_STREAMED_ASSET, "payout": payout, "signal": "HOLD (DOJI)",
             "confidence": 20, "notes": "Flatline Doji detected. Skipping.",
             "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p
         }
@@ -533,22 +484,18 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     best_score = min(max(total_call, total_put), 98)
 
-    # 2. STRICT CONFIDENCE >= 80 RULE
+    # STRICT 80+ CONFIDENCE THRESHOLD
     if best_score < 80:
         return {
-            "asset": asset, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
-            "confidence": best_score, "notes": f"Confidence {best_score}/100 below 80 threshold.",
+            "asset": CURRENT_STREAMED_ASSET, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
+            "confidence": best_score, "notes": f"Score {best_score}/100 below 80 threshold.",
             "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p
         }
 
     signal = "CALL (HIGHER / 🟢)" if total_call >= total_put else "PUT (LOWER / 🔴)"
 
-    is_otc = "(OTC)" in asset
-    market_tag = "💱 OTC Statistical Engine" if is_otc else "🌐 Real-Market Engine"
-    stream_tag = "🟢 Live Screen Tick Feed" if is_active_phone_chart else "⚪ Multi-Market Scan Feed"
-
     breakdown = (
-        f"• <b>Market Type:</b> {market_tag} ({stream_tag})\n"
+        f"• <b>Live Feed Sync:</b> 🟢 100% Direct Screen Match\n"
         f"• <b>Price Action (+25):</b> {pa_status}\n"
         f"• <b>Market Structure (+20):</b> {struct_label}\n"
         f"• <b>Trend Alignment (+15):</b> {trend_label}\n"
@@ -557,7 +504,7 @@ def run_scoring_architecture(asset, tf_key="1"):
     )
 
     return {
-        "asset": asset,
+        "asset": CURRENT_STREAMED_ASSET,
         "payout": payout,
         "signal": signal,
         "confidence": best_score,
@@ -568,7 +515,7 @@ def run_scoring_architecture(asset, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 5. SCANNER WORKER
+# 5. ZERO-LAG SCANNER WORKER
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
@@ -721,8 +668,8 @@ def get_signal_keyboard(current_asset):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     anti_cfg = get_user_anti_mtg(chat_id)
-    payout, is_p = get_verified_payout(CURRENT_STREAMED_ASSET)
-    p_badge = f"{payout}% (Screen Sync 🟢)" if is_p else f"{payout}%"
+    payout = LIVE_BROWSER_PAYOUTS.get(CURRENT_STREAMED_ASSET, 0)
+    p_badge = f"{payout}% (Screen Sync 🟢)" if payout > 0 else "Waiting for Browser Sync..."
     price_val = f"{LATEST_SCREEN_PRICE:.5f}" if LATEST_SCREEN_PRICE > 0 else "Waiting for Browser Tick..."
 
     await update.message.reply_text(
@@ -868,7 +815,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting with Anti-MTG Dual Engine (Live + OTC)...")
+    logger.info("Bot starting with Direct Screen Hook & Anti-MTG...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
