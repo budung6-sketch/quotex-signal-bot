@@ -83,7 +83,8 @@ QUOTEX_MARKETS = {
     "stocks": {"title": "📈 STOCKS (19)", "assets": STOCKS_ASSETS},
 }
 
-# Baseline price mapping
+ALL_SCAN_ASSETS = LIVE_FOREX_ASSETS + OTC_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
+
 ASSET_PRICE_BASELINES = {
     "EUR/USD": 1.0850, "GBP/USD": 1.2950, "USD/JPY": 154.20, "USD/CHF": 0.8840,
     "USD/CAD": 1.3920, "AUD/USD": 0.6550, "NZD/USD": 0.5920, "EUR/GBP": 0.8520,
@@ -95,7 +96,6 @@ ASSET_PRICE_BASELINES = {
     "Gold (OTC)": 2680.50, "Silver (OTC)": 31.80, "Bitcoin (OTC)": 64500.0
 }
 
-# Standard Default High Payout Reference
 DEFAULT_PAYOUTS = {
     "EUR/USD": 89, "GBP/USD": 88, "USD/JPY": 88, "Gold": 88,
     "USD/ARS (OTC)": 93, "USD/COP (OTC)": 91, "EUR/USD (OTC)": 90,
@@ -140,7 +140,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
                         LATEST_SCREEN_PRICE = price
 
-                        # Sync payout under both exact name and root name
                         clean_name = asset.replace(" (OTC)", "").strip()
                         if live_payout >= 50:
                             LIVE_BROWSER_PAYOUTS[asset] = live_payout
@@ -148,7 +147,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
                             LIVE_BROWSER_PAYOUTS[clean_name] = live_payout
                             LIVE_BROWSER_PAYOUTS[clean_name + " (OTC)"] = live_payout
 
-                        # Micro ticks
                         for k in [asset, CURRENT_STREAMED_ASSET]:
                             if k not in RECENT_TICKS:
                                 RECENT_TICKS[k] = []
@@ -228,7 +226,7 @@ def run_http_server():
 threading.Thread(target=run_http_server, daemon=True).start()
 
 # ---------------------------------------------------------
-# 2. LOGGING & APPLICATION RUNTIME
+# 2. LOGGING & INITIALIZATION
 # ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -453,7 +451,6 @@ def evaluate_momentum(closes):
 def get_verified_payout(asset):
     clean = asset.replace(" (OTC)", "").strip()
     with DATA_LOCK:
-        # Check active live payouts from browser screen first
         if asset in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS[asset], True
         if clean in LIVE_BROWSER_PAYOUTS:
@@ -461,13 +458,11 @@ def get_verified_payout(asset):
         if asset == CURRENT_STREAMED_ASSET and "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"], True
 
-    # Fallback lookup
     if asset in DEFAULT_PAYOUTS:
         return DEFAULT_PAYOUTS[asset], False
     if clean in DEFAULT_PAYOUTS:
         return DEFAULT_PAYOUTS[clean], False
 
-    # Standard default for open markets
     return 88, False
 
 def build_asset_candles(asset):
@@ -550,7 +545,7 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     is_otc = "(OTC)" in asset
     market_tag = "💱 OTC Statistical Engine" if is_otc else "🌐 Real-Market Engine"
-    stream_tag = "🟢 Live Screen Tick Feed" if is_active_phone_chart else "⚪ Unified Market Scan"
+    stream_tag = "🟢 Live Screen Tick Feed" if is_active_phone_chart else "⚪ Multi-Market Scan Feed"
 
     breakdown = (
         f"• <b>Market Type:</b> {market_tag} ({stream_tag})\n"
@@ -573,7 +568,7 @@ def run_scoring_architecture(asset, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 5. ALL-MARKET SCANNER WORKER (LIVE + OTC COMBINED)
+# 5. SCANNER WORKER
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
@@ -584,32 +579,19 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
         try:
             cycle = int(time.time() / total_seconds)
             if LAST_SENT_CANDLE.get(chat_id) == cycle:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.0)
                 continue
 
-            if single_asset:
-                scan_order = [single_asset]
-            else:
-                # Combined Live & OTC scanning pool
-                combined_market_pool = LIVE_FOREX_ASSETS + OTC_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
-                scan_order = [CURRENT_STREAMED_ASSET] + [a for a in combined_market_pool if a != CURRENT_STREAMED_ASSET]
+            target = single_asset if single_asset else CURRENT_STREAMED_ASSET
 
-            found = None
-
-            for asset in scan_order:
-                if not ACTIVE_SCANNERS.get(chat_id, False):
-                    break
-
-                res = run_scoring_architecture(asset, tf_key)
-
-                if res["payout"] >= 88 and res["confidence"] >= 80 and not res["signal"].startswith("HOLD"):
-                    found = res
-                    break
-
-                await asyncio.sleep(0.01)
-
-            if not found or not ACTIVE_SCANNERS.get(chat_id, False):
+            if LATEST_SCREEN_PRICE <= 0:
                 await asyncio.sleep(1.0)
+                continue
+
+            res = run_scoring_architecture(target, tf_key)
+
+            if res["payout"] < 88 or res["confidence"] < 80 or res["signal"].startswith("HOLD"):
+                await asyncio.sleep(0.5)
                 continue
 
             curr_sec = int(time.time()) % total_seconds
@@ -626,32 +608,37 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             LAST_SENT_CANDLE[chat_id] = cycle
 
-            price_str = f"{found['current_price']:.5f}" if found['current_price'] < 100 else f"{found['current_price']:.2f}"
+            if LATEST_SCREEN_PRICE < 100:
+                price_str = f"{LATEST_SCREEN_PRICE:.5f}"
+            else:
+                price_str = f"{LATEST_SCREEN_PRICE:.2f}"
+
+            actual_payout = LIVE_BROWSER_PAYOUTS.get(target, res["payout"])
             anti_cfg = get_user_anti_mtg(chat_id)
 
             msg = (
-                f"🚨 <b>QUOTEX ENTRY SIGNAL (SCORE: {found['confidence']}/100)</b>\n"
+                f"🚨 <b>QUOTEX LIVE SIGNAL (SCORE: {res['confidence']}/100)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"• <b>Asset:</b> {found['asset']}\n"
-                f"• <b>Current Market Price:</b> <code>{price_str}</code>\n"
-                f"• <b>Payout:</b> <b>{found['payout']}%</b> (Strict &gt;= 88% Filter)\n"
-                f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Chart Timeframe:</b> {found['tf_data']['label']}\n"
-                f"• <b>Option Expiry:</b> {found['tf_data']['expiry']}\n"
+                f"• <b>Asset:</b> {target}\n"
+                f"• <b>Current Live Price:</b> <code>{price_str}</code> (Exact Screen Match)\n"
+                f"• <b>Payout:</b> <b>{actual_payout}%</b> (From Quotex UI)\n"
+                f"• <b>Direction:</b> <b>{res['signal']}</b>\n"
+                f"• <b>Chart Timeframe:</b> {res['tf_data']['label']}\n"
+                f"• <b>Option Expiry:</b> {res['tf_data']['expiry']}\n"
                 f"• <b>Preparation Window:</b> <b>10 SECONDS LEFT &rarr; ENTER AT 00:00</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"🛡️ <b>Anti-MTG Money Management:</b>\n"
                 f"• <b>Recommended Stake:</b> <code>₹{anti_cfg['current']}</code> (Step {anti_cfg['step']}/{anti_cfg['max_steps']})\n"
-                f"• <b>Rule:</b> Zero loss martingale. Compounding profit on win; Reset to ₹{anti_cfg['base']} on loss.\n"
+                f"• <b>Rule:</b> Compounding win streak. Instant reset to ₹{anti_cfg['base']} on loss.\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence Overview:</b>\n"
-                f"{found['notes']}\n"
+                f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"<i>Trade active. Log result below:</i>"
             )
 
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ Log Win (Step {anti_cfg['step']})", callback_data=f"log_win_{found['payout']}"),
+                [InlineKeyboardButton(f"✅ Log Win (Step {anti_cfg['step']})", callback_data=f"log_win_{actual_payout}"),
                  InlineKeyboardButton("❌ Log Loss (Reset)", callback_data="log_loss")],
                 [InlineKeyboardButton("⏭️ Skip", callback_data="skip_signal"),
                  InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan")]
@@ -665,10 +652,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             break
         except Exception as e:
             logger.error(f"Scanner cycle error: {e}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(1.5)
 
 # ---------------------------------------------------------
-# 6. TELEGRAM UI WITH CATEGORIES
+# 6. TELEGRAM UI & NAVIGATION HANDLERS
 # ---------------------------------------------------------
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
@@ -743,7 +730,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Live Screen Stream:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
         f"• <b>Current Live Price:</b> <code>{price_val}</code>\n"
         f"• <b>Screen Payout:</b> <code>{p_badge}</code>\n"
-        f"• <b>Active Scope:</b> Evaluates Live Real-Markets (e.g. EUR/USD) + OTC Markets simultaneously\n"
+        f"• <b>Active Scope:</b> Evaluates Live Real-Markets + OTC Markets simultaneously\n"
         f"• <b>Filters:</b> Payout <b>&ge; 88% ONLY</b> &amp; <b>80+ Confluence Score</b>\n\n"
         "Select scanning mode or browse assets below:",
         reply_markup=get_main_menu_keyboard(),
@@ -881,7 +868,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting with Combined Live & OTC Scanning...")
+    logger.info("Bot starting with Anti-MTG Dual Engine (Live + OTC)...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
