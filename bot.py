@@ -265,7 +265,6 @@ def calculate_macd(prices):
     ema12 = calculate_ema(prices, 12)
     ema26 = calculate_ema(prices, 26)
     macd_line = ema12 - ema26
-    # Fast proxy signal
     signal_line = macd_line * 0.85
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
@@ -306,14 +305,14 @@ def evaluate_price_action(candles, is_otc=False):
     prev = candles[-2]
     
     body = abs(c["close"] - c["open"])
-    c_range = max(c["high"] - c["low"], 0.00001)
+    c_range = max(c["high"] - c["low"], 0.000001)
     upper_wick = c["high"] - max(c["close"], c["open"])
     lower_wick = min(c["close"], c["open"]) - c["low"]
     
-    # Doji / Indecision
-    is_doji = (body / c_range) < 0.12
-    if is_doji:
-        return -25, -25, "Doji Indecision"
+    # Pure flatline / micro-pip Doji (only rejects extreme flatlines)
+    is_extreme_doji = (body / c_range) < 0.04 and c_range < 0.00003
+    if is_extreme_doji:
+        return -25, -25, "Flatline Doji"
 
     # Bullish Engulfing
     if c["close"] > c["open"] and prev["close"] < prev["open"]:
@@ -326,23 +325,25 @@ def evaluate_price_action(candles, is_otc=False):
             put_pts += 15
 
     # Pinbar / Wick Rejections
-    if lower_wick >= 2.0 * body:
+    if lower_wick >= 1.5 * body:
         call_pts += 15
-    if upper_wick >= 2.0 * body:
+    if upper_wick >= 1.5 * body:
         put_pts += 15
+
+    # Momentum flow
+    if c["close"] > c["open"]:
+        call_pts += 10
+    elif c["close"] < c["open"]:
+        put_pts += 10
 
     # Consecutive Directional Bars
     if len(candles) >= 3:
         if candles[-3]["close"] < candles[-3]["open"] and prev["close"] < prev["open"] and c["close"] < c["open"]:
-            put_pts += 10
+            put_pts += 5
         if candles[-3]["close"] > candles[-3]["open"] and prev["close"] > prev["open"] and c["close"] > c["open"]:
-            call_pts += 10
+            call_pts += 5
 
-    # OTC Specific Pin-wick trap handler
-    if is_otc and upper_wick > 2.5 * body and lower_wick > 1.0 * body:
-        put_pts += 5
-
-    return min(call_pts, 25), min(put_pts, 25), "Action OK"
+    return min(call_pts, 25), min(put_pts, 25), "Action Valid"
 
 # 🔴 2. Trend Regime (EMA 9 / 21 / 50) (Max 15 pts)
 def evaluate_trend_regime(closes):
@@ -352,22 +353,27 @@ def evaluate_trend_regime(closes):
     ema21 = calculate_ema(closes, 21)
     ema50 = calculate_ema(closes, min(50, len(closes)))
 
-    if p > ema9 > ema21:
+    if p > ema9 >= ema21:
         call_pts += 10
-        if ema21 > ema50:
+        if ema21 >= ema50:
             call_pts += 5
-    elif p < ema9 < ema21:
+    elif p < ema9 <= ema21:
         put_pts += 10
-        if ema21 < ema50:
+        if ema21 <= ema50:
+            put_pts += 5
+    else:
+        if p >= ema9:
+            call_pts += 5
+        else:
             put_pts += 5
 
-    regime = "Bullish" if call_pts > put_pts else "Bearish" if put_pts > call_pts else "Choppy"
+    regime = "Bullish Trend" if call_pts > put_pts else "Bearish Trend" if put_pts > call_pts else "Neutral"
     return call_pts, put_pts, regime
 
 # 🔴 3. Market Structure (HH/HL vs LH/LL & BOS) (Max 20 pts)
 def evaluate_market_structure(candles):
-    if len(candles) < 10:
-        return 0, 0, "Structure Neutral"
+    if len(candles) < 8:
+        return 10, 10, "Structure Baseline"
     
     highs = [c["high"] for c in candles[-10:]]
     lows = [c["low"] for c in candles[-10:]]
@@ -379,50 +385,49 @@ def evaluate_market_structure(candles):
     call_pts, put_pts = 0, 0
 
     # Break of Structure (BOS)
-    if p > recent_swing_high:
+    if p >= recent_swing_high:
         call_pts += 20
         status = "BOS Bullish Breakout"
-    elif p < recent_swing_low:
+    elif p <= recent_swing_low:
         put_pts += 20
         status = "BOS Bearish Breakdown"
     else:
-        # Check higher low / lower high formations
         mid_low = min(lows[-5:-1])
         mid_high = max(highs[-5:-1])
         if mid_low > recent_swing_low:
-            call_pts += 12
+            call_pts += 15
             status = "Higher Low Structure"
         elif mid_high < recent_swing_high:
-            put_pts += 12
+            put_pts += 15
             status = "Lower High Structure"
         else:
-            status = "Range Consolidation"
+            call_pts += 8
+            put_pts += 8
+            status = "Consolidation Range"
 
     return call_pts, put_pts, status
 
 # 🔴 4. Dynamic Support & Resistance / Retest (Max 10 pts)
 def evaluate_support_resistance(candles, current_price):
     if len(candles) < 15:
-        return 0, 0, 0.0, 0.0
+        return 5, 5, 0.0, 0.0
     highs = [c["high"] for c in candles[-20:-1]]
     lows = [c["low"] for c in candles[-20:-1]]
     res = max(highs)
     sup = min(lows)
 
-    call_pts, put_pts = 0, 0
-
-    # Collision Shield: Block trades into brick walls
+    call_pts, put_pts = 5, 5
     dist_to_res = (res - current_price) / max(current_price, 0.0001)
     dist_to_sup = (current_price - sup) / max(current_price, 0.0001)
 
-    if dist_to_sup <= 0.0004:
-        call_pts += 10   # Rebound off support
-        put_pts -= 20    # Do NOT put into floor
-    elif dist_to_res <= 0.0004:
-        put_pts += 10    # Rejection off resistance
-        call_pts -= 20   # Do NOT call into ceiling
+    if dist_to_sup <= 0.0005:
+        call_pts = 10
+        put_pts = 0
+    elif dist_to_res <= 0.0005:
+        put_pts = 10
+        call_pts = 0
 
-    return max(call_pts, 0), max(put_pts, 0), res, sup
+    return call_pts, put_pts, res, sup
 
 # 🔴 5. Momentum (RSI + MACD + ROC) (Max 15 pts)
 def evaluate_momentum(closes):
@@ -431,45 +436,44 @@ def evaluate_momentum(closes):
     _, _, macd_hist = calculate_macd(closes)
     roc = calculate_roc(closes, 9)
 
-    # RSI
-    if 52 <= rsi <= 68:
+    # RSI Momentum or Reversals
+    if 50 <= rsi <= 68:
         call_pts += 5
-    elif 32 <= rsi <= 48:
+    elif 32 <= rsi <= 50:
         put_pts += 5
-    elif rsi > 70:
-        put_pts += 5  # Reversal pressure
-    elif rsi < 30:
-        call_pts += 5  # Reversal pressure
-
-    # MACD Histogram Direction
-    if macd_hist > 0:
+    elif rsi > 68:
+        put_pts += 5
+    elif rsi < 32:
         call_pts += 5
-    elif macd_hist < 0:
+
+    # MACD Histogram
+    if macd_hist >= 0:
+        call_pts += 5
+    else:
         put_pts += 5
 
     # Rate of Change
-    if roc > 0.02:
+    if roc >= 0:
         call_pts += 5
-    elif roc < -0.02:
+    else:
         put_pts += 5
 
     return call_pts, put_pts, rsi, macd_hist
 
-# 🔴 6. Volatility & Chop Detector (Max 10 pts)
+# 🔴 6. Volatility & Candle Range (Max 10 pts)
 def evaluate_volatility_chop(candles):
     if len(candles) < 15:
-        return 5, 5, False, 0.0
+        return 5, 5, False, 0.0001
     atr = calculate_atr(candles, 14)
     c = candles[-1]
     curr_range = c["high"] - c["low"]
 
-    # Chop/Noise: If current candle range is < 25% of ATR, market is dead sideways
-    if curr_range < (atr * 0.25):
-        return -20, -20, True, atr  # Flag chop
+    # True dead-market filter: current range near zero
+    if curr_range <= 0.000005 and atr <= 0.000005:
+        return -25, -25, True, atr
 
-    # Expansion bonus
     call_pts, put_pts = 5, 5
-    if curr_range >= atr:
+    if curr_range >= atr * 0.7:
         call_pts += 5
         put_pts += 5
 
@@ -479,8 +483,8 @@ def evaluate_volatility_chop(candles):
 def evaluate_tick_flow(asset):
     with DATA_LOCK:
         ticks = list(RECENT_TICKS.get(asset, []))
-    if len(ticks) < 4:
-        return 0, 0, "No Ticks"
+    if len(ticks) < 3:
+        return 3, 3, "Neutral Ticks"
 
     now = time.time()
     t_30 = [t[1] for t in ticks if now - t[0] <= 30]
@@ -488,18 +492,18 @@ def evaluate_tick_flow(asset):
 
     call_pts, put_pts = 0, 0
     if len(t_30) >= 2:
-        if t_30[-1] > t_30[0]:
+        if t_30[-1] >= t_30[0]:
             call_pts += 2
         else:
             put_pts += 2
 
     if len(t_5) >= 2:
-        if t_5[-1] > t_5[0]:
+        if t_5[-1] >= t_5[0]:
             call_pts += 3
         else:
             put_pts += 3
 
-    return call_pts, put_pts, "Tick Flow Aligned"
+    return max(call_pts, 1), max(put_pts, 1), "Tick Flow Aligned"
 
 # ---------------------------------------------------------
 # 6. CENTRAL REGIME DECISION & SCORING PIPELINE
@@ -534,11 +538,11 @@ def run_scoring_architecture(asset, tf_key="1"):
     rem_sec = total_sec - (int(time.time()) % total_sec)
     payout = get_verified_payout(asset)
 
-    # 🟡 12. Payout filter (Must be >= 80% to risk capital)
-    if payout < 80:
+    # 🟡 12. Payout filter (Must be >= 75% to trade)
+    if payout < 75:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
-            "confidence": 0, "notes": f"Payout ({payout}%) below 80% minimum threshold.",
+            "confidence": 0, "notes": f"Payout ({payout}%) below 75% minimum threshold.",
             "tf_data": tf_data, "remaining_sec": rem_sec
         }
 
@@ -568,31 +572,31 @@ def run_scoring_architecture(asset, tf_key="1"):
     vo_call, vo_put, is_chop, atr = evaluate_volatility_chop(candles)
     tk_call, tk_put, _ = evaluate_tick_flow(asset)
 
-    # 🟠 10. Chop / Noise Reject
-    if is_chop or pa_status == "Doji Indecision":
+    # 🟠 10. Dead Market / Zero Range Filter
+    if is_chop or pa_status == "Flatline Doji":
         return {
-            "asset": asset, "payout": payout, "signal": "HOLD (CHOP / NOISE)",
-            "confidence": 30, "notes": "Market in flat compression / Doji cycle. Entry rejected.",
+            "asset": asset, "payout": payout, "signal": "HOLD (ZERO VOLATILITY)",
+            "confidence": 20, "notes": "Market flat / zero candle range detected. Entry skipped.",
             "tf_data": tf_data, "remaining_sec": rem_sec
         }
 
-    # 🟠 8. Multi-Timeframe Confirmation (Real market cascade M15 -> M5 -> M1)
+    # 🟠 8. Multi-Timeframe Confirmation
     mtf_call, mtf_put = 0, 0
     m5_bars = aggregate_candles(candles, 5)
     if m5_bars:
         m5_closes = [b["close"] for b in m5_bars]
         m5_ema = calculate_ema(m5_closes, 9)
-        if m5_closes[-1] > m5_ema:
+        if m5_closes[-1] >= m5_ema:
             mtf_call += 5
         else:
             mtf_put += 5
 
-    # 🟡 11. Economic / Sudden Volatility Spike Filter (Real Only)
-    if not is_otc:
-        if abs(closes[-1] - closes[-2]) > (atr * 3.5):
+    # 🟡 11. Real Market Extreme Spike Guard
+    if not is_otc and len(closes) >= 2:
+        if abs(closes[-1] - closes[-2]) > (atr * 4.0):
             return {
-                "asset": asset, "payout": payout, "signal": "HOLD (NEWS/SPIKE)",
-                "confidence": 20, "notes": "Abnormal volatility spike / Macro news candle detected.",
+                "asset": asset, "payout": payout, "signal": "HOLD (NEWS SPIKE)",
+                "confidence": 20, "notes": "Extreme market anomaly / volatility spike detected.",
                 "tf_data": tf_data, "remaining_sec": rem_sec
             }
 
@@ -600,30 +604,29 @@ def run_scoring_architecture(asset, tf_key="1"):
     total_call = pa_call + ms_call + tr_call + mo_call + sr_call + vo_call + tk_call + mtf_call
     total_put = pa_put + ms_put + tr_put + mo_put + sr_put + vo_put + tk_put + mtf_put
 
-    # NORMALIZATION & THRESHOLD
     best_score = max(total_call, total_put)
     best_score = min(best_score, 98)
 
-    # Reject signals below 85 agreement
-    if best_score < 85:
+    # Threshold set to 80+
+    if best_score < 80:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
-            "confidence": best_score, "notes": f"Score {best_score}/100 insufficient (Requires 85+ agreement).",
+            "confidence": best_score, "notes": f"Score {best_score}/100 below 80 confluence threshold.",
             "tf_data": tf_data, "remaining_sec": rem_sec
         }
 
-    signal = "CALL (HIGHER / 🟢)" if total_call > total_put else "PUT (LOWER / 🔴)"
+    signal = "CALL (HIGHER / 🟢)" if total_call >= total_put else "PUT (LOWER / 🔴)"
     market_badge = "💱 OTC Statistical Engine" if is_otc else "🌐 Real-Market MTF Engine"
 
     breakdown = (
         f"• <b>Engine:</b> {market_badge}\n"
         f"• <b>Price Action (+25):</b> {pa_status}\n"
         f"• <b>Market Structure (+20):</b> {struct_label}\n"
-        f"• <b>Trend Alignment (+15):</b> {trend_label} (EMA 9/21/50)\n"
+        f"• <b>Trend Alignment (+15):</b> {trend_label}\n"
         f"• <b>Momentum (+15):</b> RSI {rsi} | MACD Hist: {macd_h:.4f}\n"
         f"• <b>Key S/R (+10):</b> Res: {res:.5f} | Supp: {sup:.5f}\n"
-        f"• <b>Volatility (+10):</b> ATR {atr:.5f} (Expansion Verified)\n"
-        f"• <b>Tick Flow (+5):</b> Synchronized Micro Velocity"
+        f"• <b>Volatility (+10):</b> ATR {atr:.5f}\n"
+        f"• <b>Tick Flow (+5):</b> Micro Velocity Aligned"
     )
 
     return {
@@ -664,7 +667,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                     break
                 
                 res = run_scoring_architecture(asset, tf_key)
-                if res["confidence"] >= 85 and not res["signal"].startswith("HOLD"):
+                if res["confidence"] >= 80 and not res["signal"].startswith("HOLD"):
                     found = res
                     break
                 await asyncio.sleep(0.01)
@@ -786,7 +789,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Live Screen Ingestion:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
         f"• <b>Screen Payout:</b> <code>{get_verified_payout(CURRENT_STREAMED_ASSET)}%</code>\n"
         f"• <b>Scoring Pipeline:</b> Price Action (25) + Structure (20) + Trend (15) + Momentum (15) + S/R (10) + Volatility (10) + Ticks (5)\n"
-        f"• <b>Execution Filter:</b> Minimum <b>85/100 Points Agreement</b>\n\n"
+        f"• <b>Execution Filter:</b> Minimum <b>80/100 Points Agreement</b>\n\n"
         "Select scanning mode below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
@@ -821,7 +824,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(
                 f"🔎 <b>Multi-Pair Auto-Scanner Started ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
                 f"• Priority: Active Phone Chart (<b>{CURRENT_STREAMED_ASSET}</b>) $\\rightarrow$ Full Market\n"
-                f"• Threshold: <b>85+ Confluence Points Required</b>\n"
+                f"• Threshold: <b>80+ Confluence Points Required</b>\n"
                 f"• Alerts dispatched <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
