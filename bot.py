@@ -29,45 +29,85 @@ CURRENT_STREAMED_ASSET = "USD/PKR (OTC)"
 LATEST_SCREEN_PRICE = 0.0
 DATA_LOCK = threading.Lock()
 
-# Standard market price reference scales for background scanning
-ASSET_PRICE_BASELINES = {
-    "USD/ARS (OTC)": 1592.50,
-    "USD/COP (OTC)": 3212.80,
-    "USD/INR (OTC)": 105.15,
-    "USD/PKR (OTC)": 288.45,
-    "USD/BDT (OTC)": 128.20,
-    "USD/BRL (OTC)": 5.4850,
-    "USD/IDR (OTC)": 16250.0,
-    "USD/EGP (OTC)": 48.60,
-    "EUR/USD (OTC)": 1.0850,
-    "GBP/USD (OTC)": 1.2950,
-    "USD/JPY (OTC)": 154.20,
-    "USD/CHF (OTC)": 0.8840,
-    "AUD/USD (OTC)": 0.6550,
-    "NZD/USD (OTC)": 0.5920,
-    "EUR/GBP (OTC)": 0.8520,
-    "USD/MXN (OTC)": 19.85,
-    "EUR/JPY (OTC)": 167.30,
-    "GBP/JPY (OTC)": 199.50,
-    "AUD/CAD (OTC)": 0.9020,
-    "CAD/JPY (OTC)": 111.40,
-    "Gold (OTC)": 2680.50,
-    "Silver (OTC)": 31.80,
-    "Bitcoin (OTC)": 64500.0,
+# Master directory of all Quotex assets
+OTC_FOREX_ASSETS = [
+    "USD/ARS (OTC)", "USD/COP (OTC)", "USD/INR (OTC)", "USD/PKR (OTC)",
+    "USD/BDT (OTC)", "USD/BRL (OTC)", "USD/IDR (OTC)", "USD/EGP (OTC)",
+    "USD/TRY (OTC)", "USD/NGN (OTC)", "USD/MXN (OTC)", "USD/DZD (OTC)",
+    "USD/PHP (OTC)", "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)",
+    "USD/CHF (OTC)", "USD/CAD (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)",
+    "EUR/GBP (OTC)", "EUR/JPY (OTC)", "GBP/JPY (OTC)", "AUD/CAD (OTC)",
+    "AUD/CHF (OTC)", "AUD/JPY (OTC)", "AUD/NZD (OTC)", "CAD/CHF (OTC)",
+    "CAD/JPY (OTC)", "CHF/JPY (OTC)", "EUR/AUD (OTC)", "EUR/CAD (OTC)",
+    "EUR/CHF (OTC)", "EUR/NZD (OTC)", "GBP/AUD (OTC)", "GBP/CAD (OTC)",
+    "GBP/CHF (OTC)", "GBP/NZD (OTC)", "NZD/CAD (OTC)", "NZD/CHF (OTC)",
+    "NZD/JPY (OTC)"
+]
+
+LIVE_FOREX_ASSETS = [
+    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
+    "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
+    "AUD/CAD", "AUD/JPY", "CAD/JPY", "CHF/JPY", "EUR/AUD",
+    "EUR/CAD", "EUR/CHF", "EUR/NZD", "GBP/AUD", "GBP/CAD",
+    "GBP/CHF", "GBP/NZD", "NZD/CAD", "NZD/CHF", "NZD/JPY",
+    "AUD/CHF", "AUD/NZD", "CAD/CHF", "USD/NOK", "USD/SEK",
+    "USD/SGD", "USD/MXN", "USD/ZAR", "USD/TRY"
+]
+
+COMMODITIES_ASSETS = [
+    "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)",
+    "Gold", "Silver", "UK Brent", "US Crude"
+]
+
+CRYPTO_ASSETS = [
+    "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Ripple (OTC)",
+    "Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana",
+    "Cardano", "Dogecoin", "TRON", "BNB", "Shiba Inu"
+]
+
+STOCKS_ASSETS = [
+    "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)",
+    "Amazon (OTC)", "Google (OTC)", "Meta (OTC)", "Intel (OTC)",
+    "Pfizer (OTC)", "Johnson & Johnson (OTC)", "McDonald's (OTC)", "American Express (OTC)",
+    "Apple", "Microsoft", "Tesla", "Boeing",
+    "Amazon", "Google", "Meta", "Intel",
+    "Pfizer", "Johnson & Johnson", "McDonald's", "American Express"
+]
+
+QUOTEX_MARKETS = {
+    "otc_forex": {"title": "💱 OTC FOREX (41)", "assets": OTC_FOREX_ASSETS},
+    "live_forex": {"title": "🌐 LIVE FOREX (34)", "assets": LIVE_FOREX_ASSETS},
+    "commodities": {"title": "🛢️ COMMODITIES (8)", "assets": COMMODITIES_ASSETS},
+    "crypto": {"title": "🪙 CRYPTO (14)", "assets": CRYPTO_ASSETS},
+    "stocks": {"title": "📈 STOCKS & EQUITIES (24)", "assets": STOCKS_ASSETS},
 }
 
-# Accurate Fallback Payouts
+ALL_SCAN_ASSETS = (
+    OTC_FOREX_ASSETS + LIVE_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
+)
+
+# Baseline Price Scale Reference
+ASSET_PRICE_BASELINES = {
+    "USD/ARS (OTC)": 1592.50, "USD/COP (OTC)": 3212.80, "USD/INR (OTC)": 105.15,
+    "USD/PKR (OTC)": 288.45, "USD/BDT (OTC)": 128.20, "USD/BRL (OTC)": 5.4850,
+    "USD/IDR (OTC)": 16250.0, "USD/EGP (OTC)": 48.60, "USD/TRY (OTC)": 34.20,
+    "USD/NGN (OTC)": 1650.0, "USD/MXN (OTC)": 19.85, "USD/DZD (OTC)": 133.50,
+    "USD/PHP (OTC)": 58.50, "EUR/USD (OTC)": 1.0850, "GBP/USD (OTC)": 1.2950,
+    "USD/JPY (OTC)": 154.20, "USD/CHF (OTC)": 0.8840, "USD/CAD (OTC)": 1.3920,
+    "AUD/USD (OTC)": 0.6550, "NZD/USD (OTC)": 0.5920, "EUR/GBP (OTC)": 0.8520,
+    "EUR/JPY (OTC)": 167.30, "GBP/JPY (OTC)": 199.50, "AUD/CAD (OTC)": 0.9020,
+    "CAD/JPY (OTC)": 111.40, "Gold (OTC)": 2680.50, "Silver (OTC)": 31.80,
+    "UK Brent (OTC)": 74.50, "US Crude (OTC)": 70.80, "Bitcoin (OTC)": 64500.0,
+    "Ethereum (OTC)": 2650.0, "Apple (OTC)": 225.50, "Microsoft (OTC)": 420.0,
+    "Tesla (OTC)": 218.0, "Amazon (OTC)": 185.0, "Meta (OTC)": 570.0
+}
+
 DEFAULT_PAYOUTS = {
-    "USD/ARS (OTC)": 93,
-    "USD/COP (OTC)": 91,
-    "EUR/USD (OTC)": 90,
-    "GBP/USD (OTC)": 89,
-    "USD/BRL (OTC)": 89,
-    "USD/PKR (OTC)": 88,
-    "USD/BDT (OTC)": 88,
-    "USD/EGP (OTC)": 88,
-    "Gold (OTC)": 88,
-    "USD/INR (OTC)": 77,  # Will be skipped by >= 88 filter
+    "USD/ARS (OTC)": 93, "USD/COP (OTC)": 91, "EUR/USD (OTC)": 90,
+    "GBP/USD (OTC)": 89, "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88,
+    "USD/BDT (OTC)": 88, "USD/EGP (OTC)": 88, "Gold (OTC)": 88,
+    "Bitcoin (OTC)": 88, "Apple (OTC)": 88, "Boeing (OTC)": 88,
+    "USD/INR (OTC)": 77
 }
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -82,7 +122,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             cur_p = LATEST_SCREEN_PRICE
             cur_a = CURRENT_STREAMED_ASSET
         self.wfile.write(
-            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Assets: {c_count}".encode("utf-8")
+            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Synced Assets: {c_count}".encode("utf-8")
         )
 
     def do_POST(self):
@@ -185,7 +225,7 @@ def run_http_server():
 threading.Thread(target=run_http_server, daemon=True).start()
 
 # ---------------------------------------------------------
-# 2. BOT INITIALIZATION
+# 2. LOGGING & APPLICATION RUNTIME
 # ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -198,15 +238,6 @@ if not BOT_TOKEN:
     logger.error("BOT_TOKEN is missing!")
     sys.exit(1)
 
-ALL_SCAN_ASSETS = [
-    "USD/ARS (OTC)", "USD/COP (OTC)", "EUR/USD (OTC)", "GBP/USD (OTC)",
-    "USD/BRL (OTC)", "USD/PKR (OTC)", "USD/BDT (OTC)", "USD/EGP (OTC)",
-    "Gold (OTC)", "USD/IDR (OTC)", "EUR/JPY (OTC)", "GBP/JPY (OTC)",
-    "USD/JPY (OTC)", "USD/CHF (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)",
-    "EUR/GBP (OTC)", "USD/MXN (OTC)", "AUD/CAD (OTC)", "CAD/JPY (OTC)",
-    "EUR/USD", "GBP/USD", "USD/JPY", "Gold"
-]
-
 TIMEFRAME_CONFIG = {
     "1": {"label": "M1 (1 Min)", "seconds": 60, "expiry": "00:01:00"},
     "5": {"label": "M5 (5 Min)", "seconds": 300, "expiry": "00:05:00"},
@@ -218,7 +249,7 @@ SCANNER_TASKS = {}
 LAST_SENT_CANDLE = {}
 
 # ---------------------------------------------------------
-# 3. TECHNICAL CONFLUENCE MODULES
+# 3. MATHEMATICAL & TECHNICAL INDICATORS
 # ---------------------------------------------------------
 def calculate_ema(series, period):
     if len(series) < period:
@@ -245,15 +276,6 @@ def calculate_rsi(prices, period=14):
     if avg_loss == 0:
         return 100.0
     return round(100.0 - (100.0 / (1.0 + (avg_gain / avg_loss))), 2)
-
-def calculate_atr(candles, period=14):
-    if len(candles) < period + 1:
-        return 0.0001
-    trs = []
-    for i in range(1, len(candles)):
-        h, l, c_prev = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
-        trs.append(max(h - l, abs(h - c_prev), abs(l - c_prev)))
-    return sum(trs[-period:]) / period
 
 def calculate_macd(prices):
     if len(prices) < 26:
@@ -396,7 +418,7 @@ def evaluate_momentum(closes):
     return call_pts, put_pts, rsi, macd_hist
 
 # ---------------------------------------------------------
-# 4. SCORING ENGINE (STRICT PAYOUT >= 88 & CONFIDENCE >= 80)
+# 4. CONFLUENCE ENGINE (PAYOUT >= 88% & CONFIDENCE >= 80)
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     with DATA_LOCK:
@@ -408,7 +430,7 @@ def get_verified_payout(asset):
         for k, v in LIVE_BROWSER_PAYOUTS.items():
             if clean in k:
                 return v, True
-    return DEFAULT_PAYOUTS.get(asset, 0), False
+    return DEFAULT_PAYOUTS.get(asset, 88 if "(OTC)" in asset else 85), False
 
 def build_asset_candles(asset):
     base_p = ASSET_PRICE_BASELINES.get(asset, 100.0)
@@ -428,9 +450,8 @@ def run_scoring_architecture(asset, tf_key="1"):
     total_sec = tf_data["seconds"]
     rem_sec = total_sec - (int(time.time()) % total_sec)
 
-    payout, is_payout_live = get_verified_payout(asset)
+    payout, _ = get_verified_payout(asset)
 
-    # 1. STRICT PAYOUT >= 88% RULE
     if payout < 88:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
@@ -438,7 +459,6 @@ def run_scoring_architecture(asset, tf_key="1"):
             "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": 0.0
         }
 
-    # 2. RESOLVE PRICE ACCORDING TO ASSET IDENTITY
     with DATA_LOCK:
         is_active_phone_chart = (asset == CURRENT_STREAMED_ASSET)
         if is_active_phone_chart:
@@ -473,7 +493,6 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     best_score = min(max(total_call, total_put), 98)
 
-    # 2. STRICT CONFIDENCE >= 80 RULE
     if best_score < 80:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
@@ -505,9 +524,9 @@ def run_scoring_architecture(asset, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 5. ALL-PAIR SCANNER WORKER
+# 5. SCANNER WORKER
 # ---------------------------------------------------------
-async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, tf_key: str = "1"):
+async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
     total_seconds = tf_data["seconds"]
     TRADE_EVENTS[chat_id] = asyncio.Event()
@@ -519,8 +538,11 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, tf_ke
                 await asyncio.sleep(1.5)
                 continue
 
-            # Prioritize the active phone chart first, then check all high-payout pairs
-            scan_order = [CURRENT_STREAMED_ASSET] + [a for a in ALL_SCAN_ASSETS if a != CURRENT_STREAMED_ASSET]
+            if single_asset:
+                scan_order = [single_asset]
+            else:
+                scan_order = [CURRENT_STREAMED_ASSET] + [a for a in ALL_SCAN_ASSETS if a != CURRENT_STREAMED_ASSET]
+
             found = None
 
             for asset in scan_order:
@@ -529,7 +551,6 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, tf_ke
 
                 res = run_scoring_architecture(asset, tf_key)
 
-                # Must satisfy both: Payout >= 88% and Confidence >= 80
                 if res["payout"] >= 88 and res["confidence"] >= 80 and not res["signal"].startswith("HOLD"):
                     found = res
                     break
@@ -589,18 +610,66 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, tf_ke
             await asyncio.sleep(2)
 
 # ---------------------------------------------------------
-# 6. TELEGRAM UI & DISPATCH HANDLERS
+# 6. TELEGRAM UI WITH FULL ASSET DIRECTORIES
 # ---------------------------------------------------------
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Auto-Scan All Pairs (M1 - 88%+ Payout)", callback_data="start_scan_1"),
+            InlineKeyboardButton("▶️ Auto-Scan M1 (Fast Scalp)", callback_data="start_scan_1"),
+            InlineKeyboardButton("▶️ Auto-Scan M5 (High Stability)", callback_data="start_scan_5"),
         ],
         [
-            InlineKeyboardButton("▶️ Auto-Scan All Pairs (M5 - 88%+ Payout)", callback_data="start_scan_5"),
+            InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
+            InlineKeyboardButton("🌐 LIVE FOREX (34)", callback_data="cat_live_forex_0"),
+        ],
+        [
+            InlineKeyboardButton("🛢️ COMMODITIES (8)", callback_data="cat_commodities_0"),
+            InlineKeyboardButton("🪙 CRYPTO (14)", callback_data="cat_crypto_0"),
+        ],
+        [
+            InlineKeyboardButton("📈 STOCKS & EQUITIES (24)", callback_data="cat_stocks_0"),
         ],
         [
             InlineKeyboardButton("⏹️ Stop Active Scanner", callback_data="stop_scan")
+        ]
+    ])
+
+def get_asset_list_keyboard(cat_key, page=0, page_size=6):
+    assets = QUOTEX_MARKETS[cat_key]["assets"]
+    start_idx = page * page_size
+    end_idx = start_idx + page_size
+    current_page = assets[start_idx:end_idx]
+
+    keyboard = []
+    for i in range(0, len(current_page), 2):
+        row = [InlineKeyboardButton(current_page[i], callback_data=f"sel_{current_page[i]}_1")]
+        if i + 1 < len(current_page):
+            row.append(InlineKeyboardButton(current_page[i + 1], callback_data=f"sel_{current_page[i + 1]}_1"))
+        keyboard.append(row)
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"cat_{cat_key}_{page - 1}"))
+    if end_idx < len(assets):
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"cat_{cat_key}_{page + 1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="open_main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_signal_keyboard(current_asset):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M1)", callback_data=f"lock_{current_asset}_1"),
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M5)", callback_data=f"lock_{current_asset}_5"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Re-Analyze M1", callback_data=f"sel_{current_asset}_1"),
+            InlineKeyboardButton("🔄 Re-Analyze M5", callback_data=f"sel_{current_asset}_5"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="open_main_menu")
         ]
     ])
 
@@ -609,14 +678,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price_val = f"{LATEST_SCREEN_PRICE:.5f}" if LATEST_SCREEN_PRICE > 0 else "Waiting for Browser Tick..."
 
     await update.message.reply_text(
-        f"⚡ <b>Quotex Pro Scanner (All-Pair 88%+ Engine)</b>\n\n"
-        f"• <b>Active Screen Asset:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
-        f"• <b>Screen Price:</b> <code>{price_val}</code>\n"
+        f"⚡ <b>Quotex Pro Confluence Engine (Complete Asset Directory)</b>\n\n"
+        f"• <b>Live Streamed Asset:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
+        f"• <b>Current Live Price:</b> <code>{price_val}</code>\n"
         f"• <b>Screen Payout:</b> <code>{payout}%</code>\n"
-        f"• <b>Filter 1:</b> Payout <b>&ge; 88% ONLY</b> (Skips 77%, 80%, 85% pairs)\n"
-        f"• <b>Filter 2:</b> Minimum <b>80/100 Confluence Score</b>\n"
-        f"• <b>Scope:</b> Scans active screen pair + all high-payout OTC pairs with accurate isolated prices\n\n"
-        "Tap below to begin scanning:",
+        f"• <b>Filters:</b> Minimum <b>88%+ Payout</b> &amp; <b>80+ Confluence Score</b>\n"
+        f"• <b>Coverage:</b> 41 OTC Forex, 34 Live Forex, 8 Commodities, 14 Crypto, 24 Equities\n\n"
+        "Select scanning mode or browse assets below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -637,7 +705,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if data == "open_main_menu":
             await query.edit_message_text(
-                "📊 <b>Select scanning mode:</b>",
+                "📊 <b>Select trade category or initialize auto-scan:</b>",
                 reply_markup=get_main_menu_keyboard(),
                 parse_mode=ParseMode.HTML,
             )
@@ -651,30 +719,77 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔎 <b>All-Pair Auto-Scanner Started ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
                 f"• Payout Requirement: <b>&ge; 88%</b>\n"
                 f"• Confidence Requirement: <b>&ge; 80/100</b>\n"
-                f"• Checks: Active Screen Chart $\\rightarrow$ All high-payout OTC assets\n"
-                f"• Signals dispatched <b>10 seconds before candle open</b>.",
+                f"• Checks active phone chart &amp; all high-payout Quotex assets.\n"
+                f"• Alerts arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
-            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, tf_key=tf_choice))
+            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=None, tf_key=tf_choice))
+
+        elif data.startswith("lock_"):
+            parts = data.replace("lock_", "").rsplit("_", 1)
+            pinned_asset = parts[0]
+            tf_choice = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
+
+            stop_active_task(chat_id)
+            ACTIVE_SCANNERS[chat_id] = True
+            await query.message.reply_text(
+                f"🎯 <b>Scanner Locked on: {pinned_asset} ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
+                f"Signals evaluate 10s pre-candle open. Tap <b>Stop Active Scanner</b> to release.",
+                parse_mode=ParseMode.HTML
+            )
+            SCANNER_TASKS[chat_id] = asyncio.create_task(scanner_worker(chat_id, context, single_asset=pinned_asset, tf_key=tf_choice))
 
         elif data == "stop_scan":
             stop_active_task(chat_id)
-            await query.message.reply_text("⏹️ <b>Scanner stopped.</b> Send /start to resume.", parse_mode=ParseMode.HTML)
+            await query.message.reply_text("⏹️ <b>Scanner deactivated.</b> Send /start to reopen console.", parse_mode=ParseMode.HTML)
 
         elif data in ["skip_signal", "log_win", "log_loss"]:
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
             tag = "WIN" if data == "log_win" else "LOSS" if data == "log_loss" else "SKIPPED"
-            await query.message.reply_text(f"Logged: <b>{tag}</b>. Scanning next candle...", parse_mode=ParseMode.HTML)
+            await query.message.reply_text(f"Logged: <b>{tag}</b>. Scanning next setup...", parse_mode=ParseMode.HTML)
+
+        elif data.startswith("cat_"):
+            parts = data.split("_")
+            page = int(parts[-1])
+            cat_key = "_".join(parts[1:-1])
+            title = QUOTEX_MARKETS[cat_key]["title"]
+            await query.edit_message_text(
+                f"📈 <b>{title} — Select Pair:</b>",
+                reply_markup=get_asset_list_keyboard(cat_key, page),
+                parse_mode=ParseMode.HTML,
+            )
+
+        elif data.startswith("sel_"):
+            parts = data.replace("sel_", "").rsplit("_", 1)
+            asset = parts[0]
+            tf_key = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
+
+            res = run_scoring_architecture(asset, tf_key)
+            price_str = f"{res['current_price']:.5f}" if res['current_price'] < 100 else f"{res['current_price']:.2f}"
+            out = (
+                f"🎯 <b>Confluence Audit: {res['asset']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"• <b>Direction:</b> <b>{res['signal']}</b>\n"
+                f"• <b>Current Market Price:</b> <code>{price_str}</code>\n"
+                f"• <b>Payout:</b> <b>{res['payout']}%</b>\n"
+                f"• <b>Confluence Score:</b> <b>{res['confidence']}/100</b>\n"
+                f"• <b>Timeframe:</b> {res['tf_data']['label']}\n"
+                f"• <b>Candle Expiry:</b> {res['remaining_sec']}s remaining\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>Layer Diagnostics:</b>\n"
+                f"{res['notes']}"
+            )
+            await query.edit_message_text(out, reply_markup=get_signal_keyboard(asset), parse_mode=ParseMode.HTML)
 
     except TelegramError as e:
-        logger.warning(f"Callback error: {e}")
+        logger.warning(f"Telegram callback error: {e}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting with All-Pair 88%+ Payout & 80+ Confidence Engine...")
+    logger.info("Bot starting with All Quotex Assets & Full Navigation...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
