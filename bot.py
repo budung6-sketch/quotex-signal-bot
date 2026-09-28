@@ -55,10 +55,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
                 if price > 0:
                     with DATA_LOCK:
-                        # Auto-Reset if switching between different price scale pairs (e.g. 105.x down to 0.18x)
+                        # Auto-Reset if switching between different scale pairs (prevents price contamination)
                         if "ACTIVE_CHART" in REAL_CANDLE_HISTORY and REAL_CANDLE_HISTORY["ACTIVE_CHART"]:
                             last_p = REAL_CANDLE_HISTORY["ACTIVE_CHART"][-1]["close"]
-                            # If price jumps drastically (> 30%), clear contaminated cache immediately
                             if abs(price - last_p) / max(last_p, 0.0001) > 0.30:
                                 REAL_CANDLE_HISTORY["ACTIVE_CHART"] = []
                                 if asset in REAL_CANDLE_HISTORY:
@@ -194,7 +193,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN is missing! Set BOT_TOKEN in your environment variables.")
+    logger.error("BOT_TOKEN is missing! Set BOT_TOKEN in environment variables.")
     sys.exit(1)
 
 # ---------------------------------------------------------
@@ -430,7 +429,7 @@ def calculate_timeframe_bias(bars):
         return "BEARISH", ema9, ema21
 
 # ---------------------------------------------------------
-# 6. CONFLUENCE SCORING ENGINE WITH WARM-UP & MOMENTUM GUARD
+# 6. HIGH-ACCURACY CONFLUENCE SCORING ENGINE
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     with DATA_LOCK:
@@ -443,15 +442,10 @@ def get_verified_payout(asset):
     return DEFAULT_FALLBACK_PAYOUTS.get(asset, 88)
 
 def build_warmed_candles(current_price, live_bars):
-    """
-    Synthesizes clean prior candles anchored proportionally to current_price 
-    so indicators (RSI, Bollinger Bands, ATR) never explode or distort.
-    """
     warm_up_count = max(0, 35 - len(live_bars))
     synthetic_bars = []
     price_tracker = current_price
     
-    # Scale proportional steps according to price level (Forex vs Crypto vs Currencies)
     step_scale = (current_price / 1000.0) if current_price > 5.0 else 0.00012
 
     for _ in range(warm_up_count):
@@ -489,7 +483,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     current_price = close_prices[-1]
     current_candle = candles[-1]
 
-    # Doji Shield: Filter out indecision bars
+    # Filter 1: Doji Indecision Shield
     if is_doji_candle(current_candle):
         return {
             "asset": asset, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
@@ -513,14 +507,9 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     m5_bias, _, _ = calculate_timeframe_bias(m5_bars)
     m15_bias, _, _ = calculate_timeframe_bias(m15_bars)
 
-    # Reversal Scoring
+    # Reversal Confluence Scoring
     rev_put = 0
     rev_call = 0
-
-    if resistance > 0 and current_price >= (resistance * 0.9998):
-        rev_put += 25
-    if support > 0 and current_price <= (support * 1.0002):
-        rev_call += 25
 
     if upper_rej:
         rev_put += 25
@@ -532,9 +521,9 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         rev_call += 15
 
     if current_price >= (upper_bb * 0.9998) or rsi >= 68:
-        rev_put += 20
+        rev_put += 25
     if current_price <= (lower_bb * 1.0002) or rsi <= 32:
-        rev_call += 20
+        rev_call += 25
 
     if stoch_k >= 78:
         rev_put += 15
@@ -577,7 +566,22 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     best_call = max(rev_call, trend_call)
     best_put = max(rev_put, trend_put)
 
-    # MOMENTUM RUN GUARD: Prevent counter-trend trades against 3 consecutive candles
+    # Filter 2: SUPPORT & RESISTANCE COLLISION GUARD (Prevents selling at support or buying at resistance)
+    if support > 0 and current_price <= (support * 1.0008) and best_put >= best_call:
+        return {
+            "asset": asset, "payout": payout_pct, "signal": "HOLD (AT SUPPORT FLOOR / ⚪)",
+            "confidence": 35, "notes": "• <b>Protection Filter:</b> Price directly on Support floor. PUT blocked.",
+            "tf_data": tf_data, "remaining_sec": remaining_sec
+        }
+
+    if resistance > 0 and current_price >= (resistance * 0.9992) and best_call >= best_put:
+        return {
+            "asset": asset, "payout": payout_pct, "signal": "HOLD (AT RESISTANCE CEILING / ⚪)",
+            "confidence": 35, "notes": "• <b>Protection Filter:</b> Price directly at Resistance ceiling. CALL blocked.",
+            "tf_data": tf_data, "remaining_sec": remaining_sec
+        }
+
+    # Filter 3: MOMENTUM RUN GUARD (Prevents knife-catching against 3-candle runs)
     if len(candles) >= 3:
         three_red = all(c["close"] < c["open"] for c in candles[-3:])
         three_green = all(c["close"] > c["open"] for c in candles[-3:])
@@ -585,21 +589,30 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         if three_red and best_call >= best_put:
             return {
                 "asset": asset, "payout": payout_pct, "signal": "HOLD (DOWNWARD RUN / ⚪)",
-                "confidence": 40, "notes": "• <b>Market Status:</b> 3 consecutive strong red candles. Counter-trend call blocked.",
+                "confidence": 40, "notes": "• <b>Protection Filter:</b> 3 consecutive strong red candles. Counter-trend call blocked.",
                 "tf_data": tf_data, "remaining_sec": remaining_sec
             }
         if three_green and best_put >= best_call:
             return {
                 "asset": asset, "payout": payout_pct, "signal": "HOLD (UPWARD RUN / ⚪)",
-                "confidence": 40, "notes": "• <b>Market Status:</b> 3 consecutive strong green candles. Counter-trend put blocked.",
+                "confidence": 40, "notes": "• <b>Protection Filter:</b> 3 consecutive strong green candles. Counter-trend put blocked.",
                 "tf_data": tf_data, "remaining_sec": remaining_sec
             }
 
+    # Filter 4: STRICT HIGH-ACCURACY THRESHOLD (Rejects < 85% setups)
+    highest_score = max(best_call, best_put)
+    if highest_score < 85:
+        return {
+            "asset": asset, "payout": payout_pct, "signal": "HOLD (LOW CONFLUENCE / ⚪)",
+            "confidence": highest_score, "notes": "• <b>Accuracy Filter:</b> Setup lacks 85%+ multi-indicator confluence.",
+            "tf_data": tf_data, "remaining_sec": remaining_sec
+        }
+
     if best_call >= best_put:
-        confidence = min(max(best_call, 82), 96)
+        confidence = min(highest_score, 96)
         signal = "CALL (HIGHER / 🟢)"
     else:
-        confidence = min(max(best_put, 82), 96)
+        confidence = min(highest_score, 96)
         signal = "PUT (LOWER / 🔴)"
 
     is_live = "(OTC)" not in asset
@@ -636,8 +649,8 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
 # ---------------------------------------------------------
 # 7. SEQUENTIAL (1-BY-1) SCANNER WORKER
 # ---------------------------------------------------------
-async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
-    tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
+async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "5"):
+    tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["5"])
     total_seconds = tf_data["seconds"]
     scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Open Pairs"
     logger.info(f"1-by-1 Scanner active (Target: 10s pre-candle | TF: {tf_data['label']}) | Mode: {scan_desc}")
@@ -662,9 +675,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
                 if current_payout >= 85:
                     res = analyze_real_chart(asset, current_payout, tf_key)
-                    if res["confidence"] >= 78 and not res["signal"].startswith("HOLD"):
+                    # Only accept signals with confidence >= 85%
+                    if res["confidence"] >= 85 and not res["signal"].startswith("HOLD"):
                         found = res
-                        logger.info(f"Matched setup on {asset} ({current_payout}%, {res['confidence']}%)")
+                        logger.info(f"High-confluence setup on {asset} ({current_payout}%, {res['confidence']}%)")
                         break
                 await asyncio.sleep(0.01)
 
@@ -672,7 +686,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 await asyncio.sleep(1.0)
                 continue
 
-            # Deliver signal exactly 10s before candle open
+            # Deliver signal exactly 10s before candle close
             current_sec = int(time.time()) % total_seconds
             target_dispatch_sec = total_seconds - 10
 
@@ -698,12 +712,12 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 f"• <b>Asset:</b> {found['asset']}\n"
                 f"• <b>Payout:</b> <b>{found['payout']}%</b> (&gt;= 85% Verified)\n"
                 f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (&gt;= 80% Validated)\n"
+                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (Strict &gt;= 85% Filter)\n"
                 f"• <b>Chart Timeframe:</b> {found['tf_data']['label']}\n"
                 f"• <b>Option Expiry:</b> {found['tf_data']['expiry']}\n"
                 f"• <b>Preparation Window:</b> <b>10 SECONDS LEFT &rarr; ENTER AT 00:00</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Confluence (M15 Macro + M5 HTF + Price Action):</b>\n"
+                f"📊 <b>Confluence (M15 Macro + M5 HTF + S/R Shield):</b>\n"
                 f"{found['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚡ <b>ENTER AT EXACT CANDLE OPEN (00:00)</b>\n"
@@ -763,10 +777,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Auto-Scan M1 (10s Pre-Candle)", callback_data="start_scan_1"),
-            InlineKeyboardButton("▶️ Auto-Scan M5 (M15 HTF Engine)", callback_data="start_scan_5"),
+            InlineKeyboardButton("▶️ Auto-Scan M5 (M15 HTF Engine - Recommended)", callback_data="start_scan_5"),
         ],
         [
+            InlineKeyboardButton("▶️ Auto-Scan M1 (10s Pre-Candle)", callback_data="start_scan_1"),
             InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan"),
         ],
         [
@@ -790,9 +804,9 @@ def get_asset_list_keyboard(cat_key, page=0, page_size=6):
 
     keyboard = []
     for i in range(0, len(current_page), 2):
-        row = [InlineKeyboardButton(current_page[i], callback_data=f"sel_{current_page[i]}_1")]
+        row = [InlineKeyboardButton(current_page[i], callback_data=f"sel_{current_page[i]}_5")]
         if i + 1 < len(current_page):
-            row.append(InlineKeyboardButton(current_page[i + 1], callback_data=f"sel_{current_page[i + 1]}_1"))
+            row.append(InlineKeyboardButton(current_page[i + 1], callback_data=f"sel_{current_page[i + 1]}_5"))
         keyboard.append(row)
 
     nav_row = []
@@ -809,16 +823,16 @@ def get_asset_list_keyboard(cat_key, page=0, page_size=6):
 def get_signal_keyboard(current_asset, tf_key):
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M5 - Best)", callback_data=f"lock_{current_asset}_5"),
             InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M1)", callback_data=f"lock_{current_asset}_1"),
-            InlineKeyboardButton(f"🎯 Auto-Scan {current_asset} (M5)", callback_data=f"lock_{current_asset}_5"),
         ],
         [
             InlineKeyboardButton("✅ Log Win", callback_data="log_win"),
             InlineKeyboardButton("❌ Log Loss", callback_data="log_loss"),
         ],
         [
-            InlineKeyboardButton("🔄 Re-Analyze M1", callback_data=f"sel_{current_asset}_1"),
             InlineKeyboardButton("🔄 Re-Analyze M5", callback_data=f"sel_{current_asset}_5"),
+            InlineKeyboardButton("🔄 Re-Analyze M1", callback_data=f"sel_{current_asset}_1"),
         ],
         [
             InlineKeyboardButton("⬅️ Back to Menu", callback_data="open_main_menu"),
@@ -830,21 +844,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = (
         "🟢 <b>Live Real-Market: OPEN</b>"
         if live_open else
-        "🔴 <b>Live Real-Market: CLOSED (Weekend OTC & Crypto Active)</b>"
+        "🔴 <b>Live Real-Market: CLOSED (Weekend OTC Active)</b>"
     )
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex Live Tick Engine</b>\n\n"
+        f"🤖 <b>Quotex Pro Engine (Strict Confluence Filter)</b>\n\n"
         f"• <b>Market Session:</b> {status_text}\n"
-        f"• <b>Real Tick Builder:</b> Active at <code>/live_tick</code>\n"
-        f"• <b>Multi-Timeframe Stack:</b>\n"
-        f"  1. M15 Macro Trend Concurrence\n"
-        f"  2. M5 Swing Alignment\n"
-        f"  3. Momentum Run Guard (Anti-breakout)\n"
-        f"  4. Dynamic S/R Zones & Automatic Asset Isolator\n"
+        f"• <b>S/R Collision Shield:</b> Active (Blocks selling at Support or buying at Resistance)\n"
+        f"• <b>Momentum Guard:</b> Active (Blocks counter-trend 3-candle runs)\n"
+        f"• <b>Threshold:</b> Strict <b>&ge; 85% Confluence Required</b>\n"
         f"• <b>Dispatch:</b> Exact <b>10 seconds before candle open</b>\n"
-        f"• <b>Execution:</b> 1-by-1 Sequential (Payout &ge; 85%, Conf &ge; 80%)\n\n"
-        "Select your timeframe scan mode below:",
+        f"• <b>Execution:</b> 1-by-1 Sequential trades\n\n"
+        "Select your scan mode below (M5 recommended for maximum win-rate):",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -878,9 +889,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tf_label = "M5 (5 Minutes)" if tf_choice == "5" else "M1 (1 Minute)"
             await query.message.reply_text(
                 f"🔎 <b>1-by-1 {tf_label} Auto-Scanner Started!</b>\n\n"
-                f"• Evaluating <b>M15 Macro + M5 HTF Concurrence</b>.\n"
-                f"• Momentum Run Guard Active.\n"
-                f"• Filters: Payout &ge; 85% & Confidence &ge; 80%.\n"
+                f"• S/R Collision Shield: <b>ACTIVE</b>\n"
+                f"• Momentum Run Guard: <b>ACTIVE</b>\n"
+                f"• Minimum Confidence: <b>85%</b>\n"
                 f"• Signals arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
@@ -889,7 +900,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("lock_"):
             parts = data.replace("lock_", "").rsplit("_", 1)
             pinned_asset = parts[0]
-            tf_choice = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
+            tf_choice = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "5"
 
             stop_active_task(chat_id)
             ACTIVE_SCANNERS[chat_id] = True
@@ -935,7 +946,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("sel_"):
             parts = data.replace("sel_", "").rsplit("_", 1)
             asset = parts[0]
-            tf_key = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
+            tf_key = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "5"
 
             payout = get_verified_payout(asset)
             res = analyze_real_chart(asset, payout, tf_key)
@@ -949,7 +960,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• <b>Option Expiry:</b> {res['tf_data']['expiry']}\n"
                 f"• <b>Candle Countdown:</b> {res['remaining_sec']}s remaining\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Technical & M15/M5 HTF Confluence:</b>\n"
+                f"📊 <b>Technical & Confluence Overview:</b>\n"
                 f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"💡 <i>Tip: Select continuous auto-scan mode below:</i>"
@@ -970,7 +981,7 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting Live Tick Engine (Asset Isolator + 10s pre-candle loop)...")
+    logger.info("Bot starting Live Tick Engine (High Confluence + S/R Collision Shield)...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
