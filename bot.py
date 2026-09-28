@@ -257,19 +257,18 @@ STOCKS_OTC = [
 ]
 
 QUOTEX_MARKETS = {
-    "otc_forex": {"title": "💱 OTC FOREX (41 Pairs)", "assets": OTC_FOREX_ASSETS},
     "live_forex": {"title": "🌐 LIVE FOREX (34 Pairs)", "assets": LIVE_FOREX_ASSETS},
+    "otc_forex": {"title": "💱 OTC FOREX (41 Pairs)", "assets": OTC_FOREX_ASSETS},
     "commodities": {"title": "🛢️ COMMODITIES (8 Pairs)", "assets": COMMODITIES_LIVE + COMMODITIES_OTC},
     "crypto": {"title": "🪙 CRYPTO (14 Pairs)", "assets": CRYPTO_ASSETS},
     "stocks": {"title": "📈 STOCKS (25 Equities)", "assets": STOCKS_LIVE + STOCKS_OTC},
 }
 
 DEFAULT_FALLBACK_PAYOUTS = {
-    "USD/INR (OTC)": 77, "USD/ARS (OTC)": 93, "EUR/USD (OTC)": 90,
-    "GBP/USD (OTC)": 89, "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88,
-    "USD/BDT (OTC)": 88, "USD/EGP (OTC)": 88, "EUR/USD": 87,
-    "GBP/USD": 87, "USD/JPY": 86, "Gold (OTC)": 88, "Gold": 86,
-    "Bitcoin (OTC)": 88, "Bitcoin": 85
+    "USD/INR (OTC)": 77, "EUR/USD (OTC)": 90, "GBP/USD (OTC)": 89,
+    "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88, "USD/BDT (OTC)": 88,
+    "USD/EGP (OTC)": 88, "EUR/USD": 87, "GBP/USD": 87, "USD/JPY": 86,
+    "Gold (OTC)": 88, "Gold": 86, "Bitcoin (OTC)": 88, "Bitcoin": 85
 }
 
 TIMEFRAME_CONFIG = {
@@ -284,7 +283,7 @@ SCANNER_TASKS = {}
 LAST_SENT_CANDLE = {}
 
 # ---------------------------------------------------------
-# 4. MARKET TIMING (UTC) & DYNAMIC POOL
+# 4. MARKET TIMING (UTC)
 # ---------------------------------------------------------
 def is_live_market_open() -> bool:
     now = datetime.now(timezone.utc)
@@ -299,11 +298,6 @@ def is_live_market_open() -> bool:
         return False
 
     return True
-
-def get_current_scan_pool():
-    if is_live_market_open():
-        return LIVE_FOREX_ASSETS + COMMODITIES_LIVE + STOCKS_LIVE + CRYPTO_ASSETS + OTC_FOREX_ASSETS
-    return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_ASSETS
 
 # ---------------------------------------------------------
 # 5. TECHNICAL INDICATORS & PRICE ACTION
@@ -446,13 +440,13 @@ def get_verified_payout(asset):
     with DATA_LOCK:
         if asset in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS[asset]
-        if asset == CURRENT_STREAMED_ASSET and "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
+        if "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"]
         clean = asset.replace(" (OTC)", "").strip()
         for key, val in LIVE_BROWSER_PAYOUTS.items():
             if clean in key:
                 return val
-    return DEFAULT_FALLBACK_PAYOUTS.get(asset, 85)
+    return DEFAULT_FALLBACK_PAYOUTS.get(asset, 77)
 
 def build_warmed_candles(current_price, live_bars):
     warm_up_count = max(0, 35 - len(live_bars))
@@ -479,18 +473,17 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
     current_sec = int(time.time()) % total_seconds
     remaining_sec = total_seconds - current_sec
 
-    with DATA_LOCK:
-        if asset == CURRENT_STREAMED_ASSET or asset == "ACTIVE_CHART":
-            candles_raw = REAL_CANDLE_HISTORY.get(CURRENT_STREAMED_ASSET) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
-            is_live_stream = bool(candles_raw and len(candles_raw) >= 1)
-        else:
-            candles_raw = REAL_CANDLE_HISTORY.get(asset)
-            is_live_stream = bool(candles_raw and len(candles_raw) >= 1)
+    # Strictly evaluate the active phone browser stream
+    active_name = CURRENT_STREAMED_ASSET if asset == "ACTIVE_CHART" or not asset else asset
 
+    with DATA_LOCK:
+        candles_raw = REAL_CANDLE_HISTORY.get(active_name) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
         candles = list(candles_raw) if candles_raw else []
 
+    is_live_stream = bool(candles and len(candles) >= 1)
+    
     if not is_live_stream:
-        base_price = 105.1500 if "INR" in asset else 1.0850 if "EUR" in asset else 1589.0 if "ARS" in asset else 100.0
+        base_price = 105.1500
         candles = build_warmed_candles(base_price, [])
     elif len(candles) < 30:
         candles = build_warmed_candles(candles[-1]["close"], candles)
@@ -502,7 +495,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
     # Filter 1: Doji Indecision Shield
     if is_doji_candle(current_candle):
         return {
-            "asset": asset, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
+            "asset": active_name, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
             "confidence": 45, "notes": "• <b>Market Status:</b> Indecision Doji detected. Skipping.",
             "tf_data": tf_data, "remaining_sec": remaining_sec
         }
@@ -583,43 +576,44 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
     best_put = max(rev_put, trend_put)
 
     # Filter 2: SUPPORT & RESISTANCE COLLISION GUARD
+    # Blocks taking a PUT directly on a support bounce zone or CALL at resistance ceiling
     if support > 0 and current_price <= (support * 1.0008) and best_put >= best_call:
         return {
-            "asset": asset, "payout": payout_pct, "signal": "HOLD (AT SUPPORT FLOOR / ⚪)",
+            "asset": active_name, "payout": payout_pct, "signal": "HOLD (AT SUPPORT FLOOR / ⚪)",
             "confidence": 35, "notes": "• <b>Protection Filter:</b> Price directly at Support floor. PUT blocked.",
             "tf_data": tf_data, "remaining_sec": remaining_sec
         }
 
     if resistance > 0 and current_price >= (resistance * 0.9992) and best_call >= best_put:
         return {
-            "asset": asset, "payout": payout_pct, "signal": "HOLD (AT RESISTANCE CEILING / ⚪)",
+            "asset": active_name, "payout": payout_pct, "signal": "HOLD (AT RESISTANCE CEILING / ⚪)",
             "confidence": 35, "notes": "• <b>Protection Filter:</b> Price directly at Resistance ceiling. CALL blocked.",
             "tf_data": tf_data, "remaining_sec": remaining_sec
         }
 
-    # Filter 3: MOMENTUM RUN GUARD
+    # Filter 3: MOMENTUM RUN GUARD (Blocks counter-trend 3-candle breakout runs)
     if len(candles) >= 3:
         three_red = all(c["close"] < c["open"] for c in candles[-3:])
         three_green = all(c["close"] > c["open"] for c in candles[-3:])
 
         if three_red and best_call >= best_put:
             return {
-                "asset": asset, "payout": payout_pct, "signal": "HOLD (DOWNWARD RUN / ⚪)",
+                "asset": active_name, "payout": payout_pct, "signal": "HOLD (DOWNWARD RUN / ⚪)",
                 "confidence": 40, "notes": "• <b>Protection Filter:</b> 3 consecutive strong red candles. Counter-trend call blocked.",
                 "tf_data": tf_data, "remaining_sec": remaining_sec
             }
         if three_green and best_put >= best_call:
             return {
-                "asset": asset, "payout": payout_pct, "signal": "HOLD (UPWARD RUN / ⚪)",
+                "asset": active_name, "payout": payout_pct, "signal": "HOLD (UPWARD RUN / ⚪)",
                 "confidence": 40, "notes": "• <b>Protection Filter:</b> 3 consecutive strong green candles. Counter-trend put blocked.",
                 "tf_data": tf_data, "remaining_sec": remaining_sec
             }
 
-    # Filter 4: STRICT HIGH-ACCURACY THRESHOLD
+    # Filter 4: STRICT HIGH-ACCURACY THRESHOLD (Rejects < 85% setups)
     highest_score = max(best_call, best_put)
     if highest_score < 85:
         return {
-            "asset": asset, "payout": payout_pct, "signal": "HOLD (LOW CONFLUENCE / ⚪)",
+            "asset": active_name, "payout": payout_pct, "signal": "HOLD (LOW CONFLUENCE / ⚪)",
             "confidence": highest_score, "notes": "• <b>Accuracy Filter:</b> Setup lacks 85%+ multi-indicator confluence.",
             "tf_data": tf_data, "remaining_sec": remaining_sec
         }
@@ -631,9 +625,9 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
         confidence = min(highest_score, 96)
         signal = "PUT (LOWER / 🔴)"
 
-    is_otc = "(OTC)" in asset or "OTC" in asset.upper()
+    is_otc = "(OTC)" in active_name or "OTC" in active_name.upper()
     market_tag = "💱 OTC Market" if is_otc else "🌐 Live Market"
-    data_source_tag = "🟢 Live Quotex Screen Tick Feed" if is_live_stream else "⚪ Multi-Pair Background Scan"
+    data_source_tag = "🟢 Live Quotex Screen Tick Feed" if is_live_stream else "⚪ Initializing Feed"
     m5_icon = "🟢 Bullish" if m5_bias == "BULLISH" else "🔴 Bearish" if m5_bias == "BEARISH" else "⚪ Neutral"
     m15_icon = "🟢 Strong Uptrend" if m15_bias == "BULLISH" else "🔴 Strong Downtrend" if m15_bias == "BEARISH" else "⚪ Neutral"
 
@@ -653,7 +647,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
     )
 
     return {
-        "asset": asset,
+        "asset": active_name,
         "payout": payout_pct,
         "signal": signal,
         "confidence": confidence,
@@ -663,7 +657,7 @@ def analyze_real_chart(asset, payout_pct, tf_key="5"):
     }
 
 # ---------------------------------------------------------
-# 7. MULTI-PAIR AUTO-SCANNER WORKER
+# 7. SEQUENTIAL (1-BY-1) SCANNER WORKER
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "5"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["5"])
@@ -677,33 +671,13 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 await asyncio.sleep(2)
                 continue
 
-            # Prioritize the active phone screen chart, then fall back to full pool
-            if single_asset:
-                scan_list = [single_asset]
-            else:
-                all_pool = get_current_scan_pool()
-                scan_list = [CURRENT_STREAMED_ASSET] + [a for a in all_pool if a != CURRENT_STREAMED_ASSET]
+            target_asset = single_asset or CURRENT_STREAMED_ASSET
+            current_payout = get_verified_payout(target_asset)
 
-            found = None
+            res = analyze_real_chart(target_asset, current_payout, tf_key)
 
-            for asset in scan_list:
-                if not ACTIVE_SCANNERS.get(chat_id, False):
-                    break
-
-                current_payout = get_verified_payout(asset)
-
-                # Prioritize pairs with high payouts
-                if current_payout >= 80:
-                    res = analyze_real_chart(asset, current_payout, tf_key)
-
-                    if res["confidence"] >= 85 and not res["signal"].startswith("HOLD"):
-                        found = res
-                        logger.info(f"Signal found on {asset} ({current_payout}%, {res['confidence']}%)")
-                        break
-                await asyncio.sleep(0.01)
-
-            if not found or not ACTIVE_SCANNERS.get(chat_id, False):
-                await asyncio.sleep(1.0)
+            if res["confidence"] < 85 or res["signal"].startswith("HOLD"):
+                await asyncio.sleep(2.0)
                 continue
 
             # Deliver signal exactly 10s before candle close
@@ -723,23 +697,23 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             LAST_SENT_CANDLE[chat_id] = current_cycle_tag
 
-            is_otc = "(OTC)" in found["asset"] or "OTC" in found["asset"].upper()
+            is_otc = "(OTC)" in res["asset"] or "OTC" in res["asset"].upper()
             market_badge = "💱 OTC Market" if is_otc else "🌐 Live Market"
 
             msg = (
                 f"🚨 <b>QUOTEX ENTRY SIGNAL (10s PRE-CANDLE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"• <b>Asset:</b> {found['asset']}\n"
+                f"• <b>Asset:</b> {res['asset']}\n"
                 f"• <b>Market Type:</b> <b>{market_badge}</b>\n"
-                f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
-                f"• <b>Signal:</b> <b>{found['signal']}</b>\n"
-                f"• <b>Confidence Score:</b> <b>{found['confidence']}%</b> (Strict &gt;= 85% Filter)\n"
-                f"• <b>Chart Timeframe:</b> {found['tf_data']['label']}\n"
-                f"• <b>Option Expiry:</b> {found['tf_data']['expiry']}\n"
+                f"• <b>Payout:</b> <b>{res['payout']}%</b> (Direct Quotex Screen Match)\n"
+                f"• <b>Signal:</b> <b>{res['signal']}</b>\n"
+                f"• <b>Confidence Score:</b> <b>{res['confidence']}%</b> (Strict &gt;= 85% Filter)\n"
+                f"• <b>Chart Timeframe:</b> {res['tf_data']['label']}\n"
+                f"• <b>Option Expiry:</b> {res['tf_data']['expiry']}\n"
                 f"• <b>Preparation Window:</b> <b>10 SECONDS LEFT &rarr; ENTER AT 00:00</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Confluence (M15 Macro + M5 HTF + S/R Shield):</b>\n"
-                f"{found['notes']}\n"
+                f"{res['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"⚡ <b>ENTER AT EXACT CANDLE OPEN (00:00)</b>\n"
                 f"<i>(Scanner paused until this trade completes)</i>"
@@ -762,7 +736,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
-            logger.info(f"Signal sent for {found['asset']} to chat {chat_id}.")
+            logger.info(f"Signal sent to chat {chat_id}.")
 
             TRADE_EVENTS[chat_id].clear()
             lock_duration = float(total_seconds + 10)
@@ -772,8 +746,8 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             except asyncio.TimeoutError:
                 if ACTIVE_SCANNERS.get(chat_id, False):
                     status_text = (
-                        f"🏁 <b>{found['tf_data']['label']} Trade Finished!</b>\n"
-                        "Scanning all open pairs for next setup..."
+                        f"🏁 <b>{res['tf_data']['label']} Trade Finished!</b>\n"
+                        f"Analyzing next setup on <b>{target_asset}</b>..."
                     )
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -802,8 +776,8 @@ def get_main_menu_keyboard():
             InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan"),
         ],
         [
-            InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
             InlineKeyboardButton("🌐 LIVE FOREX (34)", callback_data="cat_live_forex_0"),
+            InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
         ],
         [
             InlineKeyboardButton("🛢️ COMMODITIES (8)", callback_data="cat_commodities_0"),
@@ -866,16 +840,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex Live Engine (Multi-Pair Scanner + Exact UI Sync)</b>\n\n"
+        f"🤖 <b>Quotex Live Engine (Exact UI Sync)</b>\n\n"
         f"• <b>Market Session:</b> {status_text}\n"
         f"• <b>Active Phone Pair:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
         f"• <b>Live Payout:</b> <code>{get_verified_payout(CURRENT_STREAMED_ASSET)}%</code> (From Screen)\n"
         f"• <b>S/R Collision Shield:</b> Active (Blocks buying at resistance or selling at support)\n"
         f"• <b>Momentum Guard:</b> Active (Blocks trades against 3 consecutive candles)\n"
-        f"• <b>Scan Scope:</b> Auto-evaluates active chart first, then scans all high-payout pairs\n"
         f"• <b>Threshold:</b> Strict <b>&ge; 85% Confluence Required</b>\n"
         f"• <b>Dispatch:</b> Exact <b>10 seconds before candle open</b>\n\n"
-        "Select your scan mode below (M5 recommended for highest win-rate):",
+        "Select your scan mode below (M5 recommended for best win-rate):",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -908,8 +881,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             tf_label = "M5 (5 Minutes)" if tf_choice == "5" else "M1 (1 Minute)"
             await query.message.reply_text(
-                f"🔎 <b>1-by-1 Multi-Pair {tf_label} Auto-Scanner Started!</b>\n\n"
-                f"• Checks active phone chart (<b>{CURRENT_STREAMED_ASSET}</b>) & all high-payout pairs.\n"
+                f"🔎 <b>1-by-1 {tf_label} Auto-Scanner Started!</b>\n\n"
+                f"• Pinned to active browser chart: <b>{CURRENT_STREAMED_ASSET}</b>\n"
+                f"• Live Screen Payout: <b>{get_verified_payout(CURRENT_STREAMED_ASSET)}%</b>\n"
                 f"• S/R Collision Shield: <b>ACTIVE</b>\n"
                 f"• Momentum Run Guard: <b>ACTIVE</b>\n"
                 f"• Minimum Confidence: <b>85%</b>\n"
@@ -926,7 +900,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stop_active_task(chat_id)
             ACTIVE_SCANNERS[chat_id] = True
             await query.message.reply_text(
-                f"🎯 <b>1-by-1 Scanner Locked exclusively on: {pinned_asset} ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
+                f"🎯 <b>1-by-1 Scanner Locked on: {pinned_asset} ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
                 f"• Signals deliver <b>10s before candle open</b>.\n\n"
                 f"Tap <b>Stop Scanner</b> anytime to unlock.",
                 parse_mode=ParseMode.HTML
@@ -1001,7 +975,7 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting Live Tick Engine (Multi-Pair Scanning + Exact UI Sync)...")
+    logger.info("Bot starting Live Tick Engine (Screen Payout & Asset Sync)...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
