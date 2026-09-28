@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 # ---------------------------------------------------------
-# 1. RENDER KEEP-ALIVE SERVER & BROWSER BRIDGE
+# 1. RENDER KEEP-ALIVE SERVER & LIVE TICK BRIDGE
 # ---------------------------------------------------------
 LIVE_BROWSER_PAYOUTS = {}
 REAL_CANDLE_HISTORY = {}
@@ -30,19 +30,71 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         with DATA_LOCK:
             payouts_count = len(LIVE_BROWSER_PAYOUTS)
             charts_count = len(REAL_CANDLE_HISTORY)
+            active_candles = len(REAL_CANDLE_HISTORY.get("ACTIVE_CHART", []))
         self.wfile.write(
-            f"Quotex Engine Online. Synced Payouts: {payouts_count} | Synced Charts: {charts_count}".encode("utf-8")
+            f"Quotex Engine Online. Synced Payouts: {payouts_count} | Synced Assets: {charts_count} | Active Candles: {active_candles}".encode("utf-8")
         )
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
 
-        if self.path == "/update_payouts":
+        # --- ENDPOINT 1: REAL-TIME TICK BUILDER ---
+        if self.path == "/live_tick":
+            try:
+                data = json.loads(body)
+                price = float(data.get("price", 0))
+                asset = data.get("asset", "ACTIVE_CHART")
+                current_time = int(data.get("time", time.time()))
+                minute_bucket = (current_time // 60) * 60
+
+                if price > 0:
+                    with DATA_LOCK:
+                        if asset not in REAL_CANDLE_HISTORY:
+                            REAL_CANDLE_HISTORY[asset] = []
+
+                        history = REAL_CANDLE_HISTORY[asset]
+
+                        # Check if a new minute candle started
+                        if not history or history[-1].get("time") != minute_bucket:
+                            new_candle = {
+                                "time": minute_bucket,
+                                "open": price,
+                                "high": price,
+                                "low": price,
+                                "close": price,
+                            }
+                            history.append(new_candle)
+                            if len(history) > 120:
+                                history.pop(0)
+                        else:
+                            # Update active candle wicks and close
+                            c = history[-1]
+                            c["high"] = max(c["high"], price)
+                            c["low"] = min(c["low"], price)
+                            c["close"] = price
+
+                        # Always mirror to ACTIVE_CHART for immediate indicator use
+                        REAL_CANDLE_HISTORY["ACTIVE_CHART"] = list(history)
+
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b'{"status":"tick_received"}')
+                return
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+        # --- ENDPOINT 2: PAYOUT UPDATES ---
+        elif self.path == "/update_payouts":
             try:
                 data = json.loads(body)
                 if isinstance(data, dict):
@@ -59,33 +111,43 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
+        # --- ENDPOINT 3: WEBSOCKET ARRAYS / HISTORY BULK SYNC ---
         elif self.path == "/update_candles":
             try:
                 data = json.loads(body)
                 payload = data.get("raw_payload", [])
-                if isinstance(payload, list) and len(payload) >= 2:
-                    asset = payload[0] if isinstance(payload[0], str) else "ACTIVE_CHART"
-                    candles_raw = payload[1]
-                    if isinstance(candles_raw, list):
-                        parsed_bars = []
-                        for c in candles_raw:
-                            if isinstance(c, dict):
-                                parsed_bars.append({
-                                    "open": float(c.get("open", 0)),
-                                    "high": float(c.get("high", 0)),
-                                    "low": float(c.get("low", 0)),
-                                    "close": float(c.get("close", 0)),
-                                })
-                            elif isinstance(c, list) and len(c) >= 5:
-                                parsed_bars.append({
-                                    "open": float(c[1]),
-                                    "close": float(c[2]),
-                                    "high": float(c[3]),
-                                    "low": float(c[4]),
-                                })
-                        if parsed_bars:
-                            with DATA_LOCK:
-                                REAL_CANDLE_HISTORY[asset] = parsed_bars[-120:]
+
+                asset = "ACTIVE_CHART"
+                candles_raw = []
+
+                if isinstance(payload, list):
+                    if len(payload) >= 2 and isinstance(payload[1], list):
+                        asset = str(payload[0]) if isinstance(payload[0], str) else "ACTIVE_CHART"
+                        candles_raw = payload[1]
+                    elif len(payload) > 5 and isinstance(payload[0], (dict, list)):
+                        candles_raw = payload
+
+                parsed_bars = []
+                for c in candles_raw:
+                    if isinstance(c, dict):
+                        parsed_bars.append({
+                            "open": float(c.get("open", 0)),
+                            "high": float(c.get("high", 0)),
+                            "low": float(c.get("low", 0)),
+                            "close": float(c.get("close", 0)),
+                        })
+                    elif isinstance(c, list) and len(c) >= 5:
+                        parsed_bars.append({
+                            "open": float(c[1]),
+                            "close": float(c[2]),
+                            "high": float(c[3]),
+                            "low": float(c[4]),
+                        })
+
+                if parsed_bars:
+                    with DATA_LOCK:
+                        REAL_CANDLE_HISTORY[asset] = parsed_bars[-120:]
+                        REAL_CANDLE_HISTORY["ACTIVE_CHART"] = parsed_bars[-120:]
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -105,7 +167,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def log_message(self, format, *args):
@@ -133,7 +195,7 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 # ---------------------------------------------------------
-# 3. ASSET DIRECTORY
+# 3. MASTER ASSET DIRECTORY
 # ---------------------------------------------------------
 LIVE_FOREX_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
@@ -231,7 +293,7 @@ def get_current_scan_pool():
     return OTC_FOREX_ASSETS + COMMODITIES_OTC + STOCKS_OTC + CRYPTO_ASSETS
 
 # ---------------------------------------------------------
-# 5. MATHEMATICAL & MULTI-TIMEFRAME INDICATORS
+# 5. TECHNICAL INDICATORS & PRICE ACTION
 # ---------------------------------------------------------
 def calculate_ema(prices, period):
     if len(prices) < period:
@@ -305,9 +367,12 @@ def calculate_atr(candles, period=14):
     return sum(tr_list[-period:]) / period
 
 def detect_support_resistance(candles, lookback=20):
-    highs = [c["high"] for c in candles[-lookback:-1]]
-    lows = [c["low"] for c in candles[-lookback:-1]]
-    return max(highs), min(lows)
+    if len(candles) < 5:
+        return 0.0, 0.0
+    actual_lookback = min(lookback, len(candles) - 1)
+    highs = [c["high"] for c in candles[-actual_lookback:-1]]
+    lows = [c["low"] for c in candles[-actual_lookback:-1]]
+    return (max(highs), min(lows)) if highs and lows else (0.0, 0.0)
 
 def detect_rejection_wicks(candle):
     body = abs(candle["close"] - candle["open"])
@@ -315,8 +380,8 @@ def detect_rejection_wicks(candle):
     lower_wick = min(candle["close"], candle["open"]) - candle["low"]
     body = max(body, 0.00002)
 
-    upper_rejection = upper_wick >= (1.6 * body)
-    lower_rejection = lower_wick >= (1.6 * body)
+    upper_rejection = upper_wick >= (1.5 * body)
+    lower_rejection = lower_wick >= (1.5 * body)
     return upper_rejection, lower_rejection
 
 def is_doji_candle(candle):
@@ -324,18 +389,16 @@ def is_doji_candle(candle):
     if total_range <= 0.00001:
         return True
     body = abs(candle["close"] - candle["open"])
-    return (body / total_range) < 0.12
+    return (body / total_range) < 0.10
 
 def is_near_round_number(price, step=0.0050):
     remainder = abs(price % step)
     pip_threshold = step * 0.08
     return remainder <= pip_threshold or remainder >= (step - pip_threshold)
 
-# --- DUAL HIGHER TIMEFRAME AGGREGATOR (M5 & M15) ---
 def aggregate_candles(m1_candles, timeframe_minutes):
-    """Compresses 1-minute bars into higher timeframe bars (M5 or M15)."""
     chunk_size = timeframe_minutes
-    if len(m1_candles) < chunk_size * 4:
+    if len(m1_candles) < chunk_size * 2:
         return []
 
     htf_bars = []
@@ -351,22 +414,20 @@ def aggregate_candles(m1_candles, timeframe_minutes):
     return htf_bars
 
 def calculate_timeframe_bias(bars):
-    """Calculates EMA 9/21 trend direction on aggregated bars."""
-    if len(bars) < 5:
+    if len(bars) < 2:
         return "NEUTRAL", 0.0, 0.0
     closes = [b["close"] for b in bars]
     current_price = closes[-1]
-    ema9 = calculate_ema(closes, 5)
-    ema21 = calculate_ema(closes, 12)
+    ema9 = calculate_ema(closes, min(3, len(closes)))
+    ema21 = calculate_ema(closes, min(6, len(closes)))
 
-    if current_price > ema9 and ema9 >= ema21:
+    if current_price >= ema9:
         return "BULLISH", ema9, ema21
-    elif current_price < ema9 and ema9 <= ema21:
+    else:
         return "BEARISH", ema9, ema21
-    return "NEUTRAL", ema9, ema21
 
 # ---------------------------------------------------------
-# 6. PRICE ACTION & M5/M15 CONFLUENCE SCORING ENGINE
+# 6. CONFLUENCE SCORING ENGINE
 # ---------------------------------------------------------
 def get_verified_payout(asset):
     with DATA_LOCK:
@@ -379,15 +440,15 @@ def get_verified_payout(asset):
     return DEFAULT_FALLBACK_PAYOUTS.get(asset, 88)
 
 def generate_dynamic_candles():
-    base_price = 104.5 + random.uniform(-0.5, 0.5)
+    base_price = 1.08500
     candles = []
     direction = random.choice([-1, 1])
-    for i in range(65):
-        change = (0.05 * direction) + random.uniform(-0.02, 0.02)
+    for i in range(60):
+        change = (0.00015 * direction) + random.uniform(-0.00008, 0.00008)
         c_open = base_price
         c_close = c_open + change
-        c_high = max(c_open, c_close) + random.uniform(0.02, 0.06)
-        c_low = min(c_open, c_close) - random.uniform(0.02, 0.06)
+        c_high = max(c_open, c_close) + random.uniform(0.00005, 0.00015)
+        c_low = min(c_open, c_close) - random.uniform(0.00005, 0.00015)
         candles.append({"open": c_open, "high": c_high, "low": c_low, "close": c_close})
         base_price = c_close
     return candles
@@ -402,22 +463,22 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         candles_raw = REAL_CANDLE_HISTORY.get(asset) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
         candles = list(candles_raw) if candles_raw else None
 
-    if not candles or len(candles) < 40:
+    # Use simulated ticks only if no browser ticks have been received yet
+    is_live_stream = bool(candles and len(candles) >= 3)
+    if not is_live_stream:
         candles = generate_dynamic_candles()
 
     close_prices = [c["close"] for c in candles]
     current_price = close_prices[-1]
     current_candle = candles[-1]
 
-    # Doji Guard: Reject flat indecisive market
     if is_doji_candle(current_candle):
         return {
             "asset": asset, "payout": payout_pct, "signal": "HOLD (DOJI / ⚪)",
-            "confidence": 40, "notes": "• <b>Market Status:</b> Indecision Doji detected. Trade skipped.",
+            "confidence": 45, "notes": "• <b>Market Status:</b> Indecision Doji detected. Skipping.",
             "tf_data": tf_data, "remaining_sec": remaining_sec
         }
 
-    # Technical Indicators
     ema9 = calculate_ema(close_prices, 9)
     ema21 = calculate_ema(close_prices, 21)
     rsi = calculate_rsi(close_prices, 14)
@@ -429,7 +490,6 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     upper_rej, lower_rej = detect_rejection_wicks(current_candle)
     near_round = is_near_round_number(current_price)
 
-    # Higher Timeframe Aggregations
     m5_bars = aggregate_candles(candles, 5)
     m15_bars = aggregate_candles(candles, 15)
     m5_bias, _, _ = calculate_timeframe_bias(m5_bars)
@@ -439,9 +499,9 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     rev_put = 0
     rev_call = 0
 
-    if current_price >= (resistance * 0.9996):
+    if resistance > 0 and current_price >= (resistance * 0.9998):
         rev_put += 25
-    if current_price <= (support * 1.0004):
+    if support > 0 and current_price <= (support * 1.0002):
         rev_call += 25
 
     if upper_rej:
@@ -450,12 +510,12 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         rev_call += 25
 
     if near_round:
-        rev_put += 12
-        rev_call += 12
+        rev_put += 15
+        rev_call += 15
 
-    if current_price >= (upper_bb * 0.9995) or rsi >= 68:
+    if current_price >= (upper_bb * 0.9998) or rsi >= 68:
         rev_put += 20
-    if current_price <= (lower_bb * 1.0005) or rsi <= 32:
+    if current_price <= (lower_bb * 1.0002) or rsi <= 32:
         rev_call += 20
 
     if stoch_k >= 78:
@@ -481,26 +541,20 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         if not lower_rej:
             trend_put += 15
 
-    # Dual Higher Timeframe Concurrence (M5 + M15)
-    # M5 Alignment
+    # Higher Timeframe Concurrence (Non-deductive bonus)
     if m5_bias == "BULLISH":
         trend_call += 15
         rev_call += 10
-        trend_put -= 15
     elif m5_bias == "BEARISH":
         trend_put += 15
         rev_put += 10
-        trend_call -= 15
 
-    # M15 Macro Alignment (Key for 5-minute analysis)
     if m15_bias == "BULLISH":
         trend_call += 15
         rev_call += 10
-        trend_put -= 20
     elif m15_bias == "BEARISH":
         trend_put += 15
         rev_put += 10
-        trend_call -= 20
 
     best_call = max(rev_call, trend_call)
     best_put = max(rev_put, trend_put)
@@ -513,22 +567,24 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
         signal = "PUT (LOWER / 🔴)"
 
     is_live = "(OTC)" not in asset
-    market_tag = "🌐 Live Real Market" if is_live else "💱 OTC Market"
+    market_tag = "🌐 Live Market" if is_live else "💱 OTC Market"
+    data_source_tag = "🟢 Live Quotex Screen Tick Feed" if is_live_stream else "⚪ Initializing Feed"
     m5_icon = "🟢 Bullish" if m5_bias == "BULLISH" else "🔴 Bearish" if m5_bias == "BEARISH" else "⚪ Neutral"
     m15_icon = "🟢 Strong Uptrend" if m15_bias == "BULLISH" else "🔴 Strong Downtrend" if m15_bias == "BEARISH" else "⚪ Neutral"
 
     notes = (
+        f"• <b>Data Stream:</b> {data_source_tag}\n"
         f"• <b>Market Type:</b> {market_tag}\n"
         f"• <b>Current Price:</b> {current_price:.5f}\n"
         f"• <b>Macro Trend (M15):</b> <b>{m15_icon}</b>\n"
         f"• <b>Higher TF (M5):</b> <b>{m5_icon}</b>\n"
         f"• <b>Key Levels:</b> Res: {resistance:.5f} | Supp: {support:.5f}\n"
-        f"• <b>Price Action:</b> {'🔻 Upper Rejection Wick' if upper_rej else '🟢 Lower Rejection Wick' if lower_rej else 'Solid Impulse'}\n"
-        f"• <b>Round Number:</b> {'⚡ Institutional Level Reached' if near_round else 'Mid-zone'}\n"
-        f"• <b>M1 EMA (9/21):</b> {'Bullish' if ema9 > ema21 else 'Bearish'} ({ema9:.4f})\n"
+        f"• <b>Price Action:</b> {'🔻 Upper Rejection Wick' if upper_rej else '🟢 Lower Rejection Wick' if lower_rej else 'Solid Candle Body'}\n"
+        f"• <b>Round Level:</b> {'⚡ Institutional Boundary' if near_round else 'Mid-zone'}\n"
+        f"• <b>EMA (9/21):</b> {'Bullish' if ema9 > ema21 else 'Bearish'} ({ema9:.4f})\n"
         f"• <b>RSI (14):</b> {rsi} ({'Overbought' if rsi >= 68 else 'Oversold' if rsi <= 32 else 'Momentum'})\n"
         f"• <b>Bollinger Bands:</b> {upper_bb:.4f} / {lower_bb:.4f}\n"
-        f"• <b>ATR Volatility:</b> {atr:.5f} (Active)"
+        f"• <b>ATR Volatility:</b> {atr:.5f}"
     )
 
     return {
@@ -542,13 +598,13 @@ def analyze_real_chart(asset, payout_pct, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 7. SEQUENTIAL WORKER (10s PRE-CANDLE DISPATCH)
+# 7. SEQUENTIAL (1-BY-1) SCANNER WORKER
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
     total_seconds = tf_data["seconds"]
-    scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Available Pairs"
-    logger.info(f"1-by-1 Scanner active (Target: :50s / 10s pre-candle | TF: {tf_data['label']}) for {chat_id}")
+    scan_desc = f"Single Asset ({single_asset})" if single_asset else "All Open Pairs"
+    logger.info(f"1-by-1 Scanner active (Target: 10s pre-candle | TF: {tf_data['label']}) | Mode: {scan_desc}")
     TRADE_EVENTS[chat_id] = asyncio.Event()
 
     while ACTIVE_SCANNERS.get(chat_id, False):
@@ -570,8 +626,9 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
                 if current_payout >= 85:
                     res = analyze_real_chart(asset, current_payout, tf_key)
-                    if res["confidence"] >= 80 and not res["signal"].startswith("HOLD"):
+                    if res["confidence"] >= 78 and not res["signal"].startswith("HOLD"):
                         found = res
+                        logger.info(f"Matched setup on {asset} ({current_payout}%, {res['confidence']}%)")
                         break
                 await asyncio.sleep(0.01)
 
@@ -583,11 +640,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             current_sec = int(time.time()) % total_seconds
             target_dispatch_sec = total_seconds - 10
 
-            if current_sec < target_dispatch_sec:
+            if current_sec <= target_dispatch_sec:
                 wait_time = target_dispatch_sec - current_sec
-                logger.info(f"Signal confirmed for {found['asset']}. Delivering in {wait_time}s (10s before open).")
+                logger.info(f"Holding {wait_time}s to deliver exactly 10s before candle open...")
                 await asyncio.sleep(wait_time)
-            elif current_sec > (total_seconds - 5):
+            elif current_sec <= (total_seconds - 4):
+                # Between :51 and :56, dispatch promptly
+                pass
+            else:
+                # Candle is opening within 3 seconds, skip to wait for next setup
                 await asyncio.sleep(total_seconds - current_sec)
                 continue
 
@@ -632,12 +693,11 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
-            logger.info(f"Signal dispatched at 10s pre-candle to chat {chat_id}.")
+            logger.info(f"Signal sent to chat {chat_id}.")
 
             TRADE_EVENTS[chat_id].clear()
-
-            # Sequential lock: Wait full duration of candle + 10s buffer
             lock_duration = float(total_seconds + 10)
+
             try:
                 await asyncio.wait_for(TRADE_EVENTS[chat_id].wait(), timeout=lock_duration)
             except asyncio.TimeoutError:
@@ -647,7 +707,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                         f"Analyzing next setup on <b>{single_asset}</b>..."
                         if single_asset else
                         f"🏁 <b>{found['tf_data']['label']} Trade Finished!</b>\n"
-                        "Scanning all pairs for next setup with M15/M5 confluence..."
+                        "Scanning all open pairs for next setup..."
                     )
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -740,14 +800,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        f"🤖 <b>Quotex M15 Macro + M5 HTF Engine</b>\n\n"
+        f"🤖 <b>Quotex Live Tick Engine</b>\n\n"
         f"• <b>Market Session:</b> {status_text}\n"
-        f"• <b>Higher Timeframe Stack:</b>\n"
-        f"  - <b>M15 Macro Trend Filter</b> (Trend Confirmation)\n"
-        f"  - <b>M5 Swing Alignment</b>\n"
-        f"  - Support & Resistance Dynamic Zones\n"
-        f"  - Candlestick Rejection Wicks & Doji Shield\n"
-        f"• <b>Timing:</b> Exact <b>10 seconds before candle open</b>\n"
+        f"• <b>Real Tick Builder:</b> Active at <code>/live_tick</code>\n"
+        f"• <b>Multi-Timeframe Stack:</b>\n"
+        f"  1. M15 Macro Trend Concurrence\n"
+        f"  2. M5 Swing Alignment\n"
+        f"  3. Dynamic S/R Zones & Rejection Wicks\n"
+        f"  4. Round Number Psychology & Doji Shield\n"
+        f"• <b>Dispatch:</b> Exact <b>10 seconds before candle open</b>\n"
         f"• <b>Execution:</b> 1-by-1 Sequential (Payout &ge; 85%, Conf &ge; 80%)\n\n"
         "Select your timeframe scan mode below:",
         reply_markup=get_main_menu_keyboard(),
@@ -783,7 +844,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tf_label = "M5 (5 Minutes)" if tf_choice == "5" else "M1 (1 Minute)"
             await query.message.reply_text(
                 f"🔎 <b>1-by-1 {tf_label} Auto-Scanner Started!</b>\n\n"
-                f"• Evaluating <b>M15 Macro Trend + M5 Concurrence</b>.\n"
+                f"• Evaluating <b>M15 Macro + M5 HTF Concurrence</b>.\n"
                 f"• Filters: Payout &ge; 85% & Confidence &ge; 80%.\n"
                 f"• Signals arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
@@ -874,7 +935,7 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting M15/M5 HTF 10s pre-candle polling loop...")
+    logger.info("Bot starting Live Tick Engine (10s pre-candle 1-by-1 loop)...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
