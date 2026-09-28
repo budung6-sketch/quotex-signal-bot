@@ -25,27 +25,14 @@ from telegram.ext import (
 LIVE_BROWSER_PAYOUTS = {}
 REAL_CANDLE_HISTORY = {}
 RECENT_TICKS = {}
-CURRENT_STREAMED_ASSET = "USD/PKR (OTC)"
+CURRENT_STREAMED_ASSET = "EUR/USD"
 LATEST_SCREEN_PRICE = 0.0
 DATA_LOCK = threading.Lock()
 
 # Anti-MTG State Management
 USER_STAKE_CONFIG = {}  # {chat_id: {"base": 100, "current": 100, "step": 1, "max_steps": 3, "streak": 0}}
 
-OTC_FOREX_ASSETS = [
-    "USD/ARS (OTC)", "USD/COP (OTC)", "USD/INR (OTC)", "USD/PKR (OTC)",
-    "USD/BDT (OTC)", "USD/BRL (OTC)", "USD/IDR (OTC)", "USD/EGP (OTC)",
-    "USD/TRY (OTC)", "USD/NGN (OTC)", "USD/MXN (OTC)", "USD/DZD (OTC)",
-    "USD/PHP (OTC)", "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)",
-    "USD/CHF (OTC)", "USD/CAD (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)",
-    "EUR/GBP (OTC)", "EUR/JPY (OTC)", "GBP/JPY (OTC)", "AUD/CAD (OTC)",
-    "AUD/CHF (OTC)", "AUD/JPY (OTC)", "AUD/NZD (OTC)", "CAD/CHF (OTC)",
-    "CAD/JPY (OTC)", "CHF/JPY (OTC)", "EUR/AUD (OTC)", "EUR/CAD (OTC)",
-    "EUR/CHF (OTC)", "EUR/NZD (OTC)", "GBP/AUD (OTC)", "GBP/CAD (OTC)",
-    "GBP/CHF (OTC)", "GBP/NZD (OTC)", "NZD/CAD (OTC)", "NZD/CHF (OTC)",
-    "NZD/JPY (OTC)"
-]
-
+# Master directory of all Quotex assets (Both Live & OTC)
 LIVE_FOREX_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD",
     "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
@@ -56,48 +43,65 @@ LIVE_FOREX_ASSETS = [
     "USD/SGD", "USD/MXN", "USD/ZAR", "USD/TRY"
 ]
 
+OTC_FOREX_ASSETS = [
+    "EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)", "USD/CHF (OTC)",
+    "USD/CAD (OTC)", "AUD/USD (OTC)", "NZD/USD (OTC)", "EUR/GBP (OTC)",
+    "EUR/JPY (OTC)", "GBP/JPY (OTC)", "USD/INR (OTC)", "USD/PKR (OTC)",
+    "USD/BDT (OTC)", "USD/BRL (OTC)", "USD/IDR (OTC)", "USD/EGP (OTC)",
+    "USD/TRY (OTC)", "USD/NGN (OTC)", "USD/MXN (OTC)", "USD/ARS (OTC)",
+    "USD/COP (OTC)", "USD/DZD (OTC)", "USD/PHP (OTC)", "AUD/CAD (OTC)",
+    "AUD/CHF (OTC)", "AUD/JPY (OTC)", "AUD/NZD (OTC)", "CAD/CHF (OTC)",
+    "CAD/JPY (OTC)", "CHF/JPY (OTC)", "EUR/AUD (OTC)", "EUR/CAD (OTC)",
+    "EUR/CHF (OTC)", "EUR/NZD (OTC)", "GBP/AUD (OTC)", "GBP/CAD (OTC)",
+    "GBP/CHF (OTC)", "GBP/NZD (OTC)", "NZD/CAD (OTC)", "NZD/CHF (OTC)",
+    "NZD/JPY (OTC)"
+]
+
 COMMODITIES_ASSETS = [
-    "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)",
-    "Gold", "Silver", "UK Brent", "US Crude"
+    "Gold", "Silver", "UK Brent", "US Crude",
+    "Gold (OTC)", "Silver (OTC)", "UK Brent (OTC)", "US Crude (OTC)"
 ]
 
 CRYPTO_ASSETS = [
-    "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Ripple (OTC)",
     "Bitcoin", "Ethereum", "Litecoin", "Ripple", "Solana",
-    "Cardano", "Dogecoin", "TRON", "BNB", "Shiba Inu"
+    "Cardano", "Dogecoin", "TRON", "BNB", "Shiba Inu",
+    "Bitcoin (OTC)", "Ethereum (OTC)", "Litecoin (OTC)", "Ripple (OTC)"
 ]
 
 STOCKS_ASSETS = [
+    "Apple", "Microsoft", "Tesla", "Boeing", "Amazon", "Google", "Meta",
+    "Intel", "Pfizer", "Johnson & Johnson", "McDonald's", "American Express",
     "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)",
-    "Amazon (OTC)", "Google (OTC)", "Meta (OTC)", "Intel (OTC)",
-    "Pfizer (OTC)", "Johnson & Johnson (OTC)", "McDonald's (OTC)", "American Express (OTC)",
-    "Apple", "Microsoft", "Tesla", "Boeing", "Amazon", "Google", "Meta"
+    "Amazon (OTC)", "Google (OTC)", "Meta (OTC)"
 ]
 
 QUOTEX_MARKETS = {
-    "otc_forex": {"title": "💱 OTC FOREX (41)", "assets": OTC_FOREX_ASSETS},
     "live_forex": {"title": "🌐 LIVE FOREX (34)", "assets": LIVE_FOREX_ASSETS},
+    "otc_forex": {"title": "💱 OTC FOREX (41)", "assets": OTC_FOREX_ASSETS},
     "commodities": {"title": "🛢️ COMMODITIES (8)", "assets": COMMODITIES_ASSETS},
     "crypto": {"title": "🪙 CRYPTO (14)", "assets": CRYPTO_ASSETS},
     "stocks": {"title": "📈 STOCKS (19)", "assets": STOCKS_ASSETS},
 }
 
-ALL_SCAN_ASSETS = OTC_FOREX_ASSETS + LIVE_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
-
+# Baseline price mapping
 ASSET_PRICE_BASELINES = {
+    "EUR/USD": 1.0850, "GBP/USD": 1.2950, "USD/JPY": 154.20, "USD/CHF": 0.8840,
+    "USD/CAD": 1.3920, "AUD/USD": 0.6550, "NZD/USD": 0.5920, "EUR/GBP": 0.8520,
+    "Gold": 2680.50, "Silver": 31.80, "Bitcoin": 64500.0,
     "USD/ARS (OTC)": 1592.50, "USD/COP (OTC)": 3212.80, "USD/INR (OTC)": 105.15,
     "USD/PKR (OTC)": 288.45, "USD/BDT (OTC)": 128.20, "USD/BRL (OTC)": 5.4850,
     "USD/IDR (OTC)": 16250.0, "USD/EGP (OTC)": 48.60, "USD/TRY (OTC)": 34.20,
     "EUR/USD (OTC)": 1.0850, "GBP/USD (OTC)": 1.2950, "USD/JPY (OTC)": 154.20,
-    "USD/CHF (OTC)": 0.8840, "AUD/USD (OTC)": 0.6550, "Gold (OTC)": 2680.50,
-    "Silver (OTC)": 31.80, "Bitcoin (OTC)": 64500.0, "Apple (OTC)": 225.50
+    "Gold (OTC)": 2680.50, "Silver (OTC)": 31.80, "Bitcoin (OTC)": 64500.0
 }
 
+# Standard Default High Payout Reference
 DEFAULT_PAYOUTS = {
+    "EUR/USD": 89, "GBP/USD": 88, "USD/JPY": 88, "Gold": 88,
     "USD/ARS (OTC)": 93, "USD/COP (OTC)": 91, "EUR/USD (OTC)": 90,
     "GBP/USD (OTC)": 89, "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88,
     "USD/BDT (OTC)": 88, "USD/EGP (OTC)": 88, "Gold (OTC)": 88,
-    "USD/INR (OTC)": 77
+    "Bitcoin (OTC)": 88, "USD/INR (OTC)": 77
 }
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -112,7 +116,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             cur_p = LATEST_SCREEN_PRICE
             cur_a = CURRENT_STREAMED_ASSET
         self.wfile.write(
-            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Assets: {c_count}".encode("utf-8")
+            f"Quotex Engine Active | Stream: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Assets: {c_count}".encode("utf-8")
         )
 
     def do_POST(self):
@@ -124,7 +128,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 price = float(data.get("price", 0))
-                asset = data.get("asset", "ACTIVE_CHART")
+                asset = data.get("asset", "ACTIVE_CHART").strip()
                 live_payout = int(data.get("payout", 0))
                 current_time = float(data.get("time", time.time()))
                 minute_bucket = int(current_time // 60) * 60
@@ -136,10 +140,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
                         LATEST_SCREEN_PRICE = price
 
+                        # Sync payout under both exact name and root name
+                        clean_name = asset.replace(" (OTC)", "").strip()
                         if live_payout >= 50:
-                            LIVE_BROWSER_PAYOUTS[CURRENT_STREAMED_ASSET] = live_payout
                             LIVE_BROWSER_PAYOUTS[asset] = live_payout
+                            LIVE_BROWSER_PAYOUTS[CURRENT_STREAMED_ASSET] = live_payout
+                            LIVE_BROWSER_PAYOUTS[clean_name] = live_payout
+                            LIVE_BROWSER_PAYOUTS[clean_name + " (OTC)"] = live_payout
 
+                        # Micro ticks
                         for k in [asset, CURRENT_STREAMED_ASSET]:
                             if k not in RECENT_TICKS:
                                 RECENT_TICKS[k] = []
@@ -182,7 +191,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 data = json.loads(body)
                 if isinstance(data, dict):
                     with DATA_LOCK:
-                        LIVE_BROWSER_PAYOUTS.update(data)
+                        for k, v in data.items():
+                            LIVE_BROWSER_PAYOUTS[k] = int(v)
+                            clean = k.replace(" (OTC)", "").strip()
+                            LIVE_BROWSER_PAYOUTS[clean] = int(v)
+                            LIVE_BROWSER_PAYOUTS[clean + " (OTC)"] = int(v)
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -239,7 +252,7 @@ SCANNER_TASKS = {}
 LAST_SENT_CANDLE = {}
 
 # ---------------------------------------------------------
-# 3. ANTI-MARTINGALE COMPLIANT CONFLUENCE MODULES
+# 3. MATHEMATICAL & TECHNICAL INDICATORS
 # ---------------------------------------------------------
 def get_user_anti_mtg(chat_id):
     if chat_id not in USER_STAKE_CONFIG:
@@ -263,7 +276,7 @@ def update_anti_mtg_outcome(chat_id, outcome: str, payout_pct: int):
         else:
             cfg["current"] = cfg["base"]
             cfg["step"] = 1
-    else:  # LOSS or RESET
+    else:
         cfg["current"] = cfg["base"]
         cfg["step"] = 1
         cfg["streak"] = 0
@@ -435,22 +448,31 @@ def evaluate_momentum(closes):
     return call_pts, put_pts, rsi, macd_hist
 
 # ---------------------------------------------------------
-# 4. CONFLUENCE ENGINE (PAYOUT >= 88% & CONFIDENCE >= 80)
+# 4. MULTI-MARKET SCORING ENGINE (PAYOUT >= 88% & CONFIDENCE >= 80)
 # ---------------------------------------------------------
 def get_verified_payout(asset):
+    clean = asset.replace(" (OTC)", "").strip()
     with DATA_LOCK:
+        # Check active live payouts from browser screen first
         if asset in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS[asset], True
+        if clean in LIVE_BROWSER_PAYOUTS:
+            return LIVE_BROWSER_PAYOUTS[clean], True
         if asset == CURRENT_STREAMED_ASSET and "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
             return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"], True
-        clean = asset.replace(" (OTC)", "").strip()
-        for k, v in LIVE_BROWSER_PAYOUTS.items():
-            if clean in k:
-                return v, True
-    return DEFAULT_PAYOUTS.get(asset, 88 if "(OTC)" in asset else 85), False
+
+    # Fallback lookup
+    if asset in DEFAULT_PAYOUTS:
+        return DEFAULT_PAYOUTS[asset], False
+    if clean in DEFAULT_PAYOUTS:
+        return DEFAULT_PAYOUTS[clean], False
+
+    # Standard default for open markets
+    return 88, False
 
 def build_asset_candles(asset):
-    base_p = ASSET_PRICE_BASELINES.get(asset, 100.0)
+    clean = asset.replace(" (OTC)", "").strip()
+    base_p = ASSET_PRICE_BASELINES.get(asset) or ASSET_PRICE_BASELINES.get(clean, 100.0)
     bars = []
     p = base_p
     step = p * 0.0001
@@ -467,8 +489,9 @@ def run_scoring_architecture(asset, tf_key="1"):
     total_sec = tf_data["seconds"]
     rem_sec = total_sec - (int(time.time()) % total_sec)
 
-    payout, _ = get_verified_payout(asset)
+    payout, is_live_p = get_verified_payout(asset)
 
+    # 1. STRICT PAYOUT >= 88% RULE
     if payout < 88:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
@@ -476,12 +499,17 @@ def run_scoring_architecture(asset, tf_key="1"):
             "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": 0.0
         }
 
+    # 2. RESOLVE REAL SCREEN VS BACKGROUND CANDLES
+    clean_target = asset.replace(" (OTC)", "").strip()
     with DATA_LOCK:
-        is_active_phone_chart = (asset == CURRENT_STREAMED_ASSET)
+        is_active_phone_chart = (
+            asset == CURRENT_STREAMED_ASSET or 
+            clean_target == CURRENT_STREAMED_ASSET.replace(" (OTC)", "").strip()
+        )
         if is_active_phone_chart:
-            candles_raw = REAL_CANDLE_HISTORY.get(CURRENT_STREAMED_ASSET)
+            candles_raw = REAL_CANDLE_HISTORY.get(CURRENT_STREAMED_ASSET) or REAL_CANDLE_HISTORY.get(asset)
             candles = list(candles_raw) if candles_raw else []
-            curr_p = LATEST_SCREEN_PRICE if LATEST_SCREEN_PRICE > 0 else (candles[-1]["close"] if candles else ASSET_PRICE_BASELINES.get(asset, 100.0))
+            curr_p = LATEST_SCREEN_PRICE if LATEST_SCREEN_PRICE > 0 else (candles[-1]["close"] if candles else build_asset_candles(asset)[-1]["close"])
         else:
             candles = build_asset_candles(asset)
             curr_p = candles[-1]["close"]
@@ -510,6 +538,7 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     best_score = min(max(total_call, total_put), 98)
 
+    # 2. STRICT CONFIDENCE >= 80 RULE
     if best_score < 80:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
@@ -519,9 +548,12 @@ def run_scoring_architecture(asset, tf_key="1"):
 
     signal = "CALL (HIGHER / 🟢)" if total_call >= total_put else "PUT (LOWER / 🔴)"
 
-    data_label = "🟢 Live Screen Tick Feed" if is_active_phone_chart else "🌐 Multi-Pair Auto Scanner Feed"
+    is_otc = "(OTC)" in asset
+    market_tag = "💱 OTC Statistical Engine" if is_otc else "🌐 Real-Market Engine"
+    stream_tag = "🟢 Live Screen Tick Feed" if is_active_phone_chart else "⚪ Unified Market Scan"
+
     breakdown = (
-        f"• <b>Feed Type:</b> {data_label}\n"
+        f"• <b>Market Type:</b> {market_tag} ({stream_tag})\n"
         f"• <b>Price Action (+25):</b> {pa_status}\n"
         f"• <b>Market Structure (+20):</b> {struct_label}\n"
         f"• <b>Trend Alignment (+15):</b> {trend_label}\n"
@@ -541,7 +573,7 @@ def run_scoring_architecture(asset, tf_key="1"):
     }
 
 # ---------------------------------------------------------
-# 5. SCANNER WORKER
+# 5. ALL-MARKET SCANNER WORKER (LIVE + OTC COMBINED)
 # ---------------------------------------------------------
 async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, single_asset: str = None, tf_key: str = "1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
@@ -558,7 +590,9 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             if single_asset:
                 scan_order = [single_asset]
             else:
-                scan_order = [CURRENT_STREAMED_ASSET] + [a for a in ALL_SCAN_ASSETS if a != CURRENT_STREAMED_ASSET]
+                # Combined Live & OTC scanning pool
+                combined_market_pool = LIVE_FOREX_ASSETS + OTC_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
+                scan_order = [CURRENT_STREAMED_ASSET] + [a for a in combined_market_pool if a != CURRENT_STREAMED_ASSET]
 
             found = None
 
@@ -608,7 +642,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"🛡️ <b>Anti-MTG Money Management:</b>\n"
                 f"• <b>Recommended Stake:</b> <code>₹{anti_cfg['current']}</code> (Step {anti_cfg['step']}/{anti_cfg['max_steps']})\n"
-                f"• <b>Rule:</b> Zero recovery loss martingale. Compounds on win; Resets to base ₹{anti_cfg['base']} on loss.\n"
+                f"• <b>Rule:</b> Zero loss martingale. Compounding profit on win; Reset to ₹{anti_cfg['base']} on loss.\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence Overview:</b>\n"
                 f"{found['notes']}\n"
@@ -634,17 +668,17 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             await asyncio.sleep(2)
 
 # ---------------------------------------------------------
-# 6. TELEGRAM UI & RESTORED MENUS
+# 6. TELEGRAM UI WITH CATEGORIES
 # ---------------------------------------------------------
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Auto-Scan M1 (Anti-MTG)", callback_data="start_scan_1"),
-            InlineKeyboardButton("▶️ Auto-Scan M5 (Anti-MTG)", callback_data="start_scan_5"),
+            InlineKeyboardButton("▶️ Auto-Scan M1 (Live + OTC)", callback_data="start_scan_1"),
+            InlineKeyboardButton("▶️ Auto-Scan M5 (Live + OTC)", callback_data="start_scan_5"),
         ],
         [
-            InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
             InlineKeyboardButton("🌐 LIVE FOREX (34)", callback_data="cat_live_forex_0"),
+            InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
         ],
         [
             InlineKeyboardButton("🛢️ COMMODITIES (8)", callback_data="cat_commodities_0"),
@@ -700,16 +734,17 @@ def get_signal_keyboard(current_asset):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     anti_cfg = get_user_anti_mtg(chat_id)
-    payout, _ = get_verified_payout(CURRENT_STREAMED_ASSET)
+    payout, is_p = get_verified_payout(CURRENT_STREAMED_ASSET)
+    p_badge = f"{payout}% (Screen Sync 🟢)" if is_p else f"{payout}%"
     price_val = f"{LATEST_SCREEN_PRICE:.5f}" if LATEST_SCREEN_PRICE > 0 else "Waiting for Browser Tick..."
 
     await update.message.reply_text(
-        f"⚡ <b>Quotex Pro Confluence Engine (Anti-MTG Edition)</b>\n\n"
-        f"• <b>Live Streamed Asset:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
+        f"⚡ <b>Quotex Live + OTC Dual Engine (Anti-MTG)</b>\n\n"
+        f"• <b>Live Screen Stream:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
         f"• <b>Current Live Price:</b> <code>{price_val}</code>\n"
-        f"• <b>Screen Payout:</b> <code>{payout}%</code>\n"
-        f"• <b>Anti-MTG Rules:</b> Zero Martingale on loss (Immediate reset to ₹{anti_cfg['base']}); Compounds only on profit streaks up to Step {anti_cfg['max_steps']}.\n"
-        f"• <b>Filters:</b> Minimum <b>88%+ Payout</b> &amp; <b>80+ Confluence Score</b>\n\n"
+        f"• <b>Screen Payout:</b> <code>{p_badge}</code>\n"
+        f"• <b>Active Scope:</b> Evaluates Live Real-Markets (e.g. EUR/USD) + OTC Markets simultaneously\n"
+        f"• <b>Filters:</b> Payout <b>&ge; 88% ONLY</b> &amp; <b>80+ Confluence Score</b>\n\n"
         "Select scanning mode or browse assets below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
@@ -742,10 +777,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ACTIVE_SCANNERS[chat_id] = True
 
             await query.message.reply_text(
-                f"🔎 <b>All-Pair Auto-Scanner Started ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
-                f"• Strategy: <b>Anti-MTG (Reverse Martingale)</b>\n"
-                f"• Payout Requirement: <b>&ge; 88%</b>\n"
-                f"• Confidence Requirement: <b>&ge; 80/100</b>\n"
+                f"🔎 <b>Unified Live + OTC Auto-Scanner Started ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
+                f"• Priority: Active Phone Chart $\\rightarrow$ All high-payout Live &amp; OTC assets\n"
+                f"• Filter: <b>&ge; 88% Payout &amp; &ge; 80/100 Confidence</b>\n"
+                f"• Strategy: <b>Anti-MTG (Reverse Martingale Compounding)</b>\n"
                 f"• Alerts arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
@@ -846,7 +881,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting with Anti-MTG Compounding Engine & Full Navigation...")
+    logger.info("Bot starting with Combined Live & OTC Scanning...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
