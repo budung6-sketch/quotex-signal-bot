@@ -29,7 +29,9 @@ CURRENT_STREAMED_ASSET = "USD/PKR (OTC)"
 LATEST_SCREEN_PRICE = 0.0
 DATA_LOCK = threading.Lock()
 
-# Master directory of all Quotex assets
+# Anti-MTG State Management
+USER_STAKE_CONFIG = {}  # {chat_id: {"base": 100, "current": 100, "step": 1, "max_steps": 3, "streak": 0}}
+
 OTC_FOREX_ASSETS = [
     "USD/ARS (OTC)", "USD/COP (OTC)", "USD/INR (OTC)", "USD/PKR (OTC)",
     "USD/BDT (OTC)", "USD/BRL (OTC)", "USD/IDR (OTC)", "USD/EGP (OTC)",
@@ -69,9 +71,7 @@ STOCKS_ASSETS = [
     "Apple (OTC)", "Microsoft (OTC)", "Tesla (OTC)", "Boeing (OTC)",
     "Amazon (OTC)", "Google (OTC)", "Meta (OTC)", "Intel (OTC)",
     "Pfizer (OTC)", "Johnson & Johnson (OTC)", "McDonald's (OTC)", "American Express (OTC)",
-    "Apple", "Microsoft", "Tesla", "Boeing",
-    "Amazon", "Google", "Meta", "Intel",
-    "Pfizer", "Johnson & Johnson", "McDonald's", "American Express"
+    "Apple", "Microsoft", "Tesla", "Boeing", "Amazon", "Google", "Meta"
 ]
 
 QUOTEX_MARKETS = {
@@ -79,34 +79,24 @@ QUOTEX_MARKETS = {
     "live_forex": {"title": "🌐 LIVE FOREX (34)", "assets": LIVE_FOREX_ASSETS},
     "commodities": {"title": "🛢️ COMMODITIES (8)", "assets": COMMODITIES_ASSETS},
     "crypto": {"title": "🪙 CRYPTO (14)", "assets": CRYPTO_ASSETS},
-    "stocks": {"title": "📈 STOCKS & EQUITIES (24)", "assets": STOCKS_ASSETS},
+    "stocks": {"title": "📈 STOCKS (19)", "assets": STOCKS_ASSETS},
 }
 
-ALL_SCAN_ASSETS = (
-    OTC_FOREX_ASSETS + LIVE_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
-)
+ALL_SCAN_ASSETS = OTC_FOREX_ASSETS + LIVE_FOREX_ASSETS + COMMODITIES_ASSETS + CRYPTO_ASSETS + STOCKS_ASSETS
 
-# Baseline Price Scale Reference
 ASSET_PRICE_BASELINES = {
     "USD/ARS (OTC)": 1592.50, "USD/COP (OTC)": 3212.80, "USD/INR (OTC)": 105.15,
     "USD/PKR (OTC)": 288.45, "USD/BDT (OTC)": 128.20, "USD/BRL (OTC)": 5.4850,
     "USD/IDR (OTC)": 16250.0, "USD/EGP (OTC)": 48.60, "USD/TRY (OTC)": 34.20,
-    "USD/NGN (OTC)": 1650.0, "USD/MXN (OTC)": 19.85, "USD/DZD (OTC)": 133.50,
-    "USD/PHP (OTC)": 58.50, "EUR/USD (OTC)": 1.0850, "GBP/USD (OTC)": 1.2950,
-    "USD/JPY (OTC)": 154.20, "USD/CHF (OTC)": 0.8840, "USD/CAD (OTC)": 1.3920,
-    "AUD/USD (OTC)": 0.6550, "NZD/USD (OTC)": 0.5920, "EUR/GBP (OTC)": 0.8520,
-    "EUR/JPY (OTC)": 167.30, "GBP/JPY (OTC)": 199.50, "AUD/CAD (OTC)": 0.9020,
-    "CAD/JPY (OTC)": 111.40, "Gold (OTC)": 2680.50, "Silver (OTC)": 31.80,
-    "UK Brent (OTC)": 74.50, "US Crude (OTC)": 70.80, "Bitcoin (OTC)": 64500.0,
-    "Ethereum (OTC)": 2650.0, "Apple (OTC)": 225.50, "Microsoft (OTC)": 420.0,
-    "Tesla (OTC)": 218.0, "Amazon (OTC)": 185.0, "Meta (OTC)": 570.0
+    "EUR/USD (OTC)": 1.0850, "GBP/USD (OTC)": 1.2950, "USD/JPY (OTC)": 154.20,
+    "USD/CHF (OTC)": 0.8840, "AUD/USD (OTC)": 0.6550, "Gold (OTC)": 2680.50,
+    "Silver (OTC)": 31.80, "Bitcoin (OTC)": 64500.0, "Apple (OTC)": 225.50
 }
 
 DEFAULT_PAYOUTS = {
     "USD/ARS (OTC)": 93, "USD/COP (OTC)": 91, "EUR/USD (OTC)": 90,
     "GBP/USD (OTC)": 89, "USD/BRL (OTC)": 89, "USD/PKR (OTC)": 88,
     "USD/BDT (OTC)": 88, "USD/EGP (OTC)": 88, "Gold (OTC)": 88,
-    "Bitcoin (OTC)": 88, "Apple (OTC)": 88, "Boeing (OTC)": 88,
     "USD/INR (OTC)": 77
 }
 
@@ -122,7 +112,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             cur_p = LATEST_SCREEN_PRICE
             cur_a = CURRENT_STREAMED_ASSET
         self.wfile.write(
-            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Synced Assets: {c_count}".encode("utf-8")
+            f"Quotex Engine Online | Pair: {cur_a} | Price: {cur_p} | Payouts: {p_count} | Assets: {c_count}".encode("utf-8")
         )
 
     def do_POST(self):
@@ -249,8 +239,35 @@ SCANNER_TASKS = {}
 LAST_SENT_CANDLE = {}
 
 # ---------------------------------------------------------
-# 3. MATHEMATICAL & TECHNICAL INDICATORS
+# 3. ANTI-MARTINGALE COMPLIANT CONFLUENCE MODULES
 # ---------------------------------------------------------
+def get_user_anti_mtg(chat_id):
+    if chat_id not in USER_STAKE_CONFIG:
+        USER_STAKE_CONFIG[chat_id] = {
+            "base": 100.0,
+            "current": 100.0,
+            "step": 1,
+            "max_steps": 3,
+            "streak": 0
+        }
+    return USER_STAKE_CONFIG[chat_id]
+
+def update_anti_mtg_outcome(chat_id, outcome: str, payout_pct: int):
+    cfg = get_user_anti_mtg(chat_id)
+    if outcome == "WIN":
+        cfg["streak"] += 1
+        if cfg["step"] < cfg["max_steps"]:
+            profit = cfg["current"] * (payout_pct / 100.0)
+            cfg["current"] = round(cfg["current"] + profit, 2)
+            cfg["step"] += 1
+        else:
+            cfg["current"] = cfg["base"]
+            cfg["step"] = 1
+    else:  # LOSS or RESET
+        cfg["current"] = cfg["base"]
+        cfg["step"] = 1
+        cfg["streak"] = 0
+
 def calculate_ema(series, period):
     if len(series) < period:
         return series[-1] if series else 0.0
@@ -455,7 +472,7 @@ def run_scoring_architecture(asset, tf_key="1"):
     if payout < 88:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
-            "confidence": 0, "notes": f"Payout ({payout}%) is below 88% filter.",
+            "confidence": 0, "notes": f"Payout ({payout}%) below 88% filter.",
             "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": 0.0
         }
 
@@ -576,6 +593,7 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             LAST_SENT_CANDLE[chat_id] = cycle
 
             price_str = f"{found['current_price']:.5f}" if found['current_price'] < 100 else f"{found['current_price']:.2f}"
+            anti_cfg = get_user_anti_mtg(chat_id)
 
             msg = (
                 f"🚨 <b>QUOTEX ENTRY SIGNAL (SCORE: {found['confidence']}/100)</b>\n"
@@ -588,6 +606,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 f"• <b>Option Expiry:</b> {found['tf_data']['expiry']}\n"
                 f"• <b>Preparation Window:</b> <b>10 SECONDS LEFT &rarr; ENTER AT 00:00</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🛡️ <b>Anti-MTG Money Management:</b>\n"
+                f"• <b>Recommended Stake:</b> <code>₹{anti_cfg['current']}</code> (Step {anti_cfg['step']}/{anti_cfg['max_steps']})\n"
+                f"• <b>Rule:</b> Zero recovery loss martingale. Compounds on win; Resets to base ₹{anti_cfg['base']} on loss.\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Technical Confluence Overview:</b>\n"
                 f"{found['notes']}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -595,8 +617,10 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             )
 
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Log Win", callback_data="log_win"), InlineKeyboardButton("❌ Log Loss", callback_data="log_loss")],
-                [InlineKeyboardButton("⏭️ Skip", callback_data="skip_signal"), InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan")]
+                [InlineKeyboardButton(f"✅ Log Win (Step {anti_cfg['step']})", callback_data=f"log_win_{found['payout']}"),
+                 InlineKeyboardButton("❌ Log Loss (Reset)", callback_data="log_loss")],
+                [InlineKeyboardButton("⏭️ Skip", callback_data="skip_signal"),
+                 InlineKeyboardButton("⏹️ Stop Scanner", callback_data="stop_scan")]
             ])
 
             await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=keyboard, parse_mode=ParseMode.HTML)
@@ -610,13 +634,13 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
             await asyncio.sleep(2)
 
 # ---------------------------------------------------------
-# 6. TELEGRAM UI WITH FULL ASSET DIRECTORIES
+# 6. TELEGRAM UI & RESTORED MENUS
 # ---------------------------------------------------------
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Auto-Scan M1 (Fast Scalp)", callback_data="start_scan_1"),
-            InlineKeyboardButton("▶️ Auto-Scan M5 (High Stability)", callback_data="start_scan_5"),
+            InlineKeyboardButton("▶️ Auto-Scan M1 (Anti-MTG)", callback_data="start_scan_1"),
+            InlineKeyboardButton("▶️ Auto-Scan M5 (Anti-MTG)", callback_data="start_scan_5"),
         ],
         [
             InlineKeyboardButton("💱 OTC FOREX (41)", callback_data="cat_otc_forex_0"),
@@ -627,7 +651,7 @@ def get_main_menu_keyboard():
             InlineKeyboardButton("🪙 CRYPTO (14)", callback_data="cat_crypto_0"),
         ],
         [
-            InlineKeyboardButton("📈 STOCKS & EQUITIES (24)", callback_data="cat_stocks_0"),
+            InlineKeyboardButton("📈 STOCKS & EQUITIES (19)", callback_data="cat_stocks_0"),
         ],
         [
             InlineKeyboardButton("⏹️ Stop Active Scanner", callback_data="stop_scan")
@@ -674,16 +698,18 @@ def get_signal_keyboard(current_asset):
     ])
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    anti_cfg = get_user_anti_mtg(chat_id)
     payout, _ = get_verified_payout(CURRENT_STREAMED_ASSET)
     price_val = f"{LATEST_SCREEN_PRICE:.5f}" if LATEST_SCREEN_PRICE > 0 else "Waiting for Browser Tick..."
 
     await update.message.reply_text(
-        f"⚡ <b>Quotex Pro Confluence Engine (Complete Asset Directory)</b>\n\n"
+        f"⚡ <b>Quotex Pro Confluence Engine (Anti-MTG Edition)</b>\n\n"
         f"• <b>Live Streamed Asset:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
         f"• <b>Current Live Price:</b> <code>{price_val}</code>\n"
         f"• <b>Screen Payout:</b> <code>{payout}%</code>\n"
-        f"• <b>Filters:</b> Minimum <b>88%+ Payout</b> &amp; <b>80+ Confluence Score</b>\n"
-        f"• <b>Coverage:</b> 41 OTC Forex, 34 Live Forex, 8 Commodities, 14 Crypto, 24 Equities\n\n"
+        f"• <b>Anti-MTG Rules:</b> Zero Martingale on loss (Immediate reset to ₹{anti_cfg['base']}); Compounds only on profit streaks up to Step {anti_cfg['max_steps']}.\n"
+        f"• <b>Filters:</b> Minimum <b>88%+ Payout</b> &amp; <b>80+ Confluence Score</b>\n\n"
         "Select scanning mode or browse assets below:",
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
@@ -717,9 +743,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await query.message.reply_text(
                 f"🔎 <b>All-Pair Auto-Scanner Started ({TIMEFRAME_CONFIG[tf_choice]['label']})</b>\n\n"
+                f"• Strategy: <b>Anti-MTG (Reverse Martingale)</b>\n"
                 f"• Payout Requirement: <b>&ge; 88%</b>\n"
                 f"• Confidence Requirement: <b>&ge; 80/100</b>\n"
-                f"• Checks active phone chart &amp; all high-payout Quotex assets.\n"
                 f"• Alerts arrive <b>10 seconds before candle open</b>.",
                 parse_mode=ParseMode.HTML
             )
@@ -743,11 +769,42 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stop_active_task(chat_id)
             await query.message.reply_text("⏹️ <b>Scanner deactivated.</b> Send /start to reopen console.", parse_mode=ParseMode.HTML)
 
-        elif data in ["skip_signal", "log_win", "log_loss"]:
+        elif data.startswith("log_win"):
+            parts = data.split("_")
+            payout_val = int(parts[2]) if len(parts) > 2 else 88
+            update_anti_mtg_outcome(chat_id, "WIN", payout_val)
+            anti_cfg = get_user_anti_mtg(chat_id)
+
             if chat_id in TRADE_EVENTS:
                 TRADE_EVENTS[chat_id].set()
-            tag = "WIN" if data == "log_win" else "LOSS" if data == "log_loss" else "SKIPPED"
-            await query.message.reply_text(f"Logged: <b>{tag}</b>. Scanning next setup...", parse_mode=ParseMode.HTML)
+
+            await query.message.reply_text(
+                f"✅ <b>WIN Confirmed!</b>\n"
+                f"• Anti-MTG Step: <b>{anti_cfg['step']}/{anti_cfg['max_steps']}</b>\n"
+                f"• Next Target Stake: <b>₹{anti_cfg['current']}</b> (Compounding profit)\n"
+                f"Scanning next 88%+ setup...",
+                parse_mode=ParseMode.HTML
+            )
+
+        elif data == "log_loss":
+            update_anti_mtg_outcome(chat_id, "LOSS", 0)
+            anti_cfg = get_user_anti_mtg(chat_id)
+
+            if chat_id in TRADE_EVENTS:
+                TRADE_EVENTS[chat_id].set()
+
+            await query.message.reply_text(
+                f"❌ <b>LOSS Logged.</b>\n"
+                f"• Anti-MTG Action: <b>NO MARTINGALE</b>.\n"
+                f"• Stake Reset: Back to base <b>₹{anti_cfg['base']}</b> (Step 1/3).\n"
+                f"Scanning next 88%+ setup...",
+                parse_mode=ParseMode.HTML
+            )
+
+        elif data == "skip_signal":
+            if chat_id in TRADE_EVENTS:
+                TRADE_EVENTS[chat_id].set()
+            await query.message.reply_text("⏭️ <b>Signal skipped.</b> Scanning next candle...", parse_mode=ParseMode.HTML)
 
         elif data.startswith("cat_"):
             parts = data.split("_")
@@ -789,7 +846,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Bot starting with All Quotex Assets & Full Navigation...")
+    logger.info("Bot starting with Anti-MTG Compounding Engine & Full Navigation...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
