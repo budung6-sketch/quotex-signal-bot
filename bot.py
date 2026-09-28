@@ -26,6 +26,7 @@ LIVE_BROWSER_PAYOUTS = {}
 REAL_CANDLE_HISTORY = {}
 RECENT_TICKS = {}  # {asset: [(timestamp, price), ...]}
 CURRENT_STREAMED_ASSET = "USD/INR (OTC)"
+LATEST_SCREEN_PRICE = 0.0
 DATA_LOCK = threading.Lock()
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -39,12 +40,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
             charts_count = len(REAL_CANDLE_HISTORY)
             active_candles = len(REAL_CANDLE_HISTORY.get("ACTIVE_CHART", []))
             active_asset = CURRENT_STREAMED_ASSET
+            last_p = LATEST_SCREEN_PRICE
         self.wfile.write(
-            f"Quotex Engine Active | Stream: {active_asset} | Payouts: {payouts_count} | Assets: {charts_count} | M1 Bars: {active_candles}".encode("utf-8")
+            f"Quotex Engine Active | Stream: {active_asset} | Price: {last_p} | Payouts: {payouts_count} | Assets: {charts_count} | M1 Bars: {active_candles}".encode("utf-8")
         )
 
     def do_POST(self):
-        global CURRENT_STREAMED_ASSET
+        global CURRENT_STREAMED_ASSET, LATEST_SCREEN_PRICE
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8")
 
@@ -62,7 +64,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
                         if asset != "ACTIVE_CHART":
                             CURRENT_STREAMED_ASSET = asset
 
-                        # Direct Payout Extraction
+                        LATEST_SCREEN_PRICE = price
+
+                        # Direct Payout Extraction from Screen
                         if live_payout >= 50:
                             LIVE_BROWSER_PAYOUTS[CURRENT_STREAMED_ASSET] = live_payout
                             LIVE_BROWSER_PAYOUTS[asset] = live_payout
@@ -241,15 +245,6 @@ def calculate_rsi(prices, period=14):
         return 100.0
     return round(100.0 - (100.0 / (1.0 + (avg_gain / avg_loss))), 2)
 
-def calculate_bollinger(prices, period=20, mult=2):
-    if len(prices) < period:
-        p = prices[-1] if prices else 0.0
-        return p, p, p
-    sl = prices[-period:]
-    sma = sum(sl) / period
-    std = math.sqrt(sum((x - sma) ** 2 for x in sl) / period)
-    return round(sma + mult * std, 5), round(sma, 5), round(sma - mult * std, 5)
-
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
         return 0.0001
@@ -297,8 +292,6 @@ def aggregate_candles(m1_candles, timeframe_minutes):
 # ---------------------------------------------------------
 # 5. PRIORITY ANALYSIS MODULES
 # ---------------------------------------------------------
-
-# 🔴 1. Price Action & Candle Structure (Max 25 pts)
 def evaluate_price_action(candles, is_otc=False):
     call_pts, put_pts = 0, 0
     c = candles[-1]
@@ -309,34 +302,28 @@ def evaluate_price_action(candles, is_otc=False):
     upper_wick = c["high"] - max(c["close"], c["open"])
     lower_wick = min(c["close"], c["open"]) - c["low"]
     
-    # Pure flatline / micro-pip Doji (only rejects extreme flatlines)
     is_extreme_doji = (body / c_range) < 0.04 and c_range < 0.00003
     if is_extreme_doji:
         return -25, -25, "Flatline Doji"
 
-    # Bullish Engulfing
     if c["close"] > c["open"] and prev["close"] < prev["open"]:
         if c["close"] >= prev["open"] and c["open"] <= prev["close"]:
             call_pts += 15
 
-    # Bearish Engulfing
     if c["close"] < c["open"] and prev["close"] > prev["open"]:
         if c["close"] <= prev["open"] and c["open"] >= prev["close"]:
             put_pts += 15
 
-    # Pinbar / Wick Rejections
     if lower_wick >= 1.5 * body:
         call_pts += 15
     if upper_wick >= 1.5 * body:
         put_pts += 15
 
-    # Momentum flow
     if c["close"] > c["open"]:
         call_pts += 10
     elif c["close"] < c["open"]:
         put_pts += 10
 
-    # Consecutive Directional Bars
     if len(candles) >= 3:
         if candles[-3]["close"] < candles[-3]["open"] and prev["close"] < prev["open"] and c["close"] < c["open"]:
             put_pts += 5
@@ -345,7 +332,6 @@ def evaluate_price_action(candles, is_otc=False):
 
     return min(call_pts, 25), min(put_pts, 25), "Action Valid"
 
-# 🔴 2. Trend Regime (EMA 9 / 21 / 50) (Max 15 pts)
 def evaluate_trend_regime(closes):
     call_pts, put_pts = 0, 0
     p = closes[-1]
@@ -370,7 +356,6 @@ def evaluate_trend_regime(closes):
     regime = "Bullish Trend" if call_pts > put_pts else "Bearish Trend" if put_pts > call_pts else "Neutral"
     return call_pts, put_pts, regime
 
-# 🔴 3. Market Structure (HH/HL vs LH/LL & BOS) (Max 20 pts)
 def evaluate_market_structure(candles):
     if len(candles) < 8:
         return 10, 10, "Structure Baseline"
@@ -384,7 +369,6 @@ def evaluate_market_structure(candles):
 
     call_pts, put_pts = 0, 0
 
-    # Break of Structure (BOS)
     if p >= recent_swing_high:
         call_pts += 20
         status = "BOS Bullish Breakout"
@@ -407,7 +391,6 @@ def evaluate_market_structure(candles):
 
     return call_pts, put_pts, status
 
-# 🔴 4. Dynamic Support & Resistance / Retest (Max 10 pts)
 def evaluate_support_resistance(candles, current_price):
     if len(candles) < 15:
         return 5, 5, 0.0, 0.0
@@ -429,14 +412,12 @@ def evaluate_support_resistance(candles, current_price):
 
     return call_pts, put_pts, res, sup
 
-# 🔴 5. Momentum (RSI + MACD + ROC) (Max 15 pts)
 def evaluate_momentum(closes):
     call_pts, put_pts = 0, 0
     rsi = calculate_rsi(closes, 14)
     _, _, macd_hist = calculate_macd(closes)
     roc = calculate_roc(closes, 9)
 
-    # RSI Momentum or Reversals
     if 50 <= rsi <= 68:
         call_pts += 5
     elif 32 <= rsi <= 50:
@@ -446,13 +427,11 @@ def evaluate_momentum(closes):
     elif rsi < 32:
         call_pts += 5
 
-    # MACD Histogram
     if macd_hist >= 0:
         call_pts += 5
     else:
         put_pts += 5
 
-    # Rate of Change
     if roc >= 0:
         call_pts += 5
     else:
@@ -460,7 +439,6 @@ def evaluate_momentum(closes):
 
     return call_pts, put_pts, rsi, macd_hist
 
-# 🔴 6. Volatility & Candle Range (Max 10 pts)
 def evaluate_volatility_chop(candles):
     if len(candles) < 15:
         return 5, 5, False, 0.0001
@@ -468,7 +446,6 @@ def evaluate_volatility_chop(candles):
     c = candles[-1]
     curr_range = c["high"] - c["low"]
 
-    # True dead-market filter: current range near zero
     if curr_range <= 0.000005 and atr <= 0.000005:
         return -25, -25, True, atr
 
@@ -479,7 +456,6 @@ def evaluate_volatility_chop(candles):
 
     return call_pts, put_pts, False, atr
 
-# 🟠 7. Micro Tick Momentum (Last 5–30 Seconds) (Max 5 pts)
 def evaluate_tick_flow(asset):
     with DATA_LOCK:
         ticks = list(RECENT_TICKS.get(asset, []))
@@ -511,14 +487,14 @@ def evaluate_tick_flow(asset):
 def get_verified_payout(asset):
     with DATA_LOCK:
         if asset in LIVE_BROWSER_PAYOUTS:
-            return LIVE_BROWSER_PAYOUTS[asset]
+            return LIVE_BROWSER_PAYOUTS[asset], True
         if asset == CURRENT_STREAMED_ASSET and "ACTIVE_CHART" in LIVE_BROWSER_PAYOUTS:
-            return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"]
+            return LIVE_BROWSER_PAYOUTS["ACTIVE_CHART"], True
         clean = asset.replace(" (OTC)", "").strip()
         for k, v in LIVE_BROWSER_PAYOUTS.items():
             if clean in k:
-                return v
-    return DEFAULT_FALLBACK_PAYOUTS.get(asset, 85)
+                return v, True
+    return DEFAULT_FALLBACK_PAYOUTS.get(asset, 85), False
 
 def build_warmed_candles(current_price):
     bars = []
@@ -536,14 +512,13 @@ def run_scoring_architecture(asset, tf_key="1"):
     tf_data = TIMEFRAME_CONFIG.get(tf_key, TIMEFRAME_CONFIG["1"])
     total_sec = tf_data["seconds"]
     rem_sec = total_sec - (int(time.time()) % total_sec)
-    payout = get_verified_payout(asset)
+    payout, is_payout_live = get_verified_payout(asset)
 
-    # 🟡 12. Payout filter (Must be >= 75% to trade)
     if payout < 75:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW PAYOUT)",
             "confidence": 0, "notes": f"Payout ({payout}%) below 75% minimum threshold.",
-            "tf_data": tf_data, "remaining_sec": rem_sec
+            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": 0.0, "is_payout_live": is_payout_live
         }
 
     is_otc = "(OTC)" in asset or "OTC" in asset.upper()
@@ -552,6 +527,7 @@ def run_scoring_architecture(asset, tf_key="1"):
         source_key = CURRENT_STREAMED_ASSET if asset == CURRENT_STREAMED_ASSET else asset
         candles_raw = REAL_CANDLE_HISTORY.get(source_key) or REAL_CANDLE_HISTORY.get("ACTIVE_CHART")
         candles = list(candles_raw) if candles_raw else []
+        live_price_override = LATEST_SCREEN_PRICE if asset == CURRENT_STREAMED_ASSET else 0.0
 
     is_live_stream = bool(candles and len(candles) >= 1)
     if not is_live_stream:
@@ -561,7 +537,7 @@ def run_scoring_architecture(asset, tf_key="1"):
         candles = build_warmed_candles(candles[-1]["close"]) + candles
 
     closes = [c["close"] for c in candles]
-    curr_p = closes[-1]
+    curr_p = live_price_override if (live_price_override > 0 and asset == CURRENT_STREAMED_ASSET) else closes[-1]
 
     # --- EXECUTE 10-STAGE FILTER ENGINE ---
     pa_call, pa_put, pa_status = evaluate_price_action(candles, is_otc)
@@ -572,15 +548,13 @@ def run_scoring_architecture(asset, tf_key="1"):
     vo_call, vo_put, is_chop, atr = evaluate_volatility_chop(candles)
     tk_call, tk_put, _ = evaluate_tick_flow(asset)
 
-    # 🟠 10. Dead Market / Zero Range Filter
     if is_chop or pa_status == "Flatline Doji":
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (ZERO VOLATILITY)",
             "confidence": 20, "notes": "Market flat / zero candle range detected. Entry skipped.",
-            "tf_data": tf_data, "remaining_sec": rem_sec
+            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p, "is_payout_live": is_payout_live
         }
 
-    # 🟠 8. Multi-Timeframe Confirmation
     mtf_call, mtf_put = 0, 0
     m5_bars = aggregate_candles(candles, 5)
     if m5_bars:
@@ -591,28 +565,25 @@ def run_scoring_architecture(asset, tf_key="1"):
         else:
             mtf_put += 5
 
-    # 🟡 11. Real Market Extreme Spike Guard
     if not is_otc and len(closes) >= 2:
         if abs(closes[-1] - closes[-2]) > (atr * 4.0):
             return {
                 "asset": asset, "payout": payout, "signal": "HOLD (NEWS SPIKE)",
                 "confidence": 20, "notes": "Extreme market anomaly / volatility spike detected.",
-                "tf_data": tf_data, "remaining_sec": rem_sec
+                "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p, "is_payout_live": is_payout_live
             }
 
-    # AGGREGATE WEIGHTED SCORE MATRIX
     total_call = pa_call + ms_call + tr_call + mo_call + sr_call + vo_call + tk_call + mtf_call
     total_put = pa_put + ms_put + tr_put + mo_put + sr_put + vo_put + tk_put + mtf_put
 
     best_score = max(total_call, total_put)
     best_score = min(best_score, 98)
 
-    # Threshold set to 80+
     if best_score < 80:
         return {
             "asset": asset, "payout": payout, "signal": "HOLD (LOW CONFLUENCE)",
             "confidence": best_score, "notes": f"Score {best_score}/100 below 80 confluence threshold.",
-            "tf_data": tf_data, "remaining_sec": rem_sec
+            "tf_data": tf_data, "remaining_sec": rem_sec, "current_price": curr_p, "is_payout_live": is_payout_live
         }
 
     signal = "CALL (HIGHER / 🟢)" if total_call >= total_put else "PUT (LOWER / 🔴)"
@@ -637,6 +608,8 @@ def run_scoring_architecture(asset, tf_key="1"):
         "notes": breakdown,
         "tf_data": tf_data,
         "remaining_sec": rem_sec,
+        "current_price": curr_p,
+        "is_payout_live": is_payout_live
     }
 
 # ---------------------------------------------------------
@@ -676,7 +649,6 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
                 await asyncio.sleep(1.0)
                 continue
 
-            # 🟠 9. Candle-Close Confirmation (Dispatched 10s before expiry)
             curr_sec = int(time.time()) % total_seconds
             target_dispatch = total_seconds - 10
 
@@ -691,11 +663,15 @@ async def scanner_worker(chat_id: int, context: ContextTypes.DEFAULT_TYPE, singl
 
             LAST_SENT_CANDLE[chat_id] = cycle
 
+            payout_badge = f"{found['payout']}% (Screen Sync 🟢)" if found.get("is_payout_live") else f"{found['payout']}%"
+            price_str = f"{found['current_price']:.5f}" if found['current_price'] < 100 else f"{found['current_price']:.2f}"
+
             msg = (
                 f"🚨 <b>QUOTEX CONFLUENCE SIGNAL (SCORE: {found['confidence']}/100)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Asset:</b> {found['asset']}\n"
-                f"• <b>Payout:</b> <b>{found['payout']}%</b>\n"
+                f"• <b>Current Live Price:</b> <code>{price_str}</code>\n"
+                f"• <b>Payout:</b> <b>{payout_badge}</b>\n"
                 f"• <b>Direction:</b> <b>{found['signal']}</b>\n"
                 f"• <b>Timeframe:</b> {found['tf_data']['label']}\n"
                 f"• <b>Expiry Duration:</b> {found['tf_data']['expiry']}\n"
@@ -784,10 +760,15 @@ def get_signal_keyboard(current_asset):
     ])
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payout, is_p = get_verified_payout(CURRENT_STREAMED_ASSET)
+    payout_label = f"{payout}% (Screen Sync 🟢)" if is_p else f"{payout}%"
+    price_val = f"{LATEST_SCREEN_PRICE:.5f}" if LATEST_SCREEN_PRICE > 0 else "Waiting for Browser Tick..."
+
     await update.message.reply_text(
         f"⚡ <b>Quotex Pro Confluence Engine</b>\n\n"
-        f"• <b>Live Screen Ingestion:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
-        f"• <b>Screen Payout:</b> <code>{get_verified_payout(CURRENT_STREAMED_ASSET)}%</code>\n"
+        f"• <b>Live Streamed Asset:</b> <code>{CURRENT_STREAMED_ASSET}</code>\n"
+        f"• <b>Current Live Price:</b> <code>{price_val}</code>\n"
+        f"• <b>Screen Payout:</b> <code>{payout_label}</code>\n"
         f"• <b>Scoring Pipeline:</b> Price Action (25) + Structure (20) + Trend (15) + Momentum (15) + S/R (10) + Volatility (10) + Ticks (5)\n"
         f"• <b>Execution Filter:</b> Minimum <b>80/100 Points Agreement</b>\n\n"
         "Select scanning mode below:",
@@ -871,12 +852,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tf_key = parts[1] if len(parts) > 1 and parts[1] in TIMEFRAME_CONFIG else "1"
 
             res = run_scoring_architecture(asset, tf_key)
+            p_badge = f"{res['payout']}% (Screen Sync 🟢)" if res.get("is_payout_live") else f"{res['payout']}%"
+            p_val = f"{res['current_price']:.5f}" if res['current_price'] < 100 else f"{res['current_price']:.2f}"
+
             out = (
                 f"🎯 <b>Confluence Audit: {res['asset']}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"• <b>Direction:</b> <b>{res['signal']}</b>\n"
+                f"• <b>Current Live Price:</b> <code>{p_val}</code>\n"
+                f"• <b>Payout:</b> <b>{p_badge}</b>\n"
                 f"• <b>Confluence Score:</b> <b>{res['confidence']}/100</b>\n"
-                f"• <b>Payout:</b> <b>{res['payout']}%</b>\n"
                 f"• <b>Timeframe:</b> {res['tf_data']['label']}\n"
                 f"• <b>Candle Expiry:</b> {res['remaining_sec']}s remaining\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -895,7 +880,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("Modular 10-Layer Confluence Architecture running...")
+    logger.info("Modular 10-Layer Confluence Architecture with Exact Price & Payout running...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
